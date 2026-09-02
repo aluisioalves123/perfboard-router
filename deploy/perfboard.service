@@ -1,0 +1,38 @@
+[Unit]
+Description=Perfboard Router (API)
+After=network.target
+
+[Service]
+Type=notify
+User=perfboard
+Group=www-data
+WorkingDirectory=/opt/perfboard
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=perfboard
+RuntimeDirectoryMode=0750
+ExecStart=/opt/perfboard/venv/bin/gunicorn -c deploy/gunicorn.conf.py deploy.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+
+# --- endurecimento: o servico so le codigo e escreve no socket ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Teto de recursos: roteamento e CPU-bound e o processo nao deve crescer.
+MemoryMax=1G
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

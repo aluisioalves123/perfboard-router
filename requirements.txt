@@ -1,0 +1,3 @@
+# O motor (perfboard/) nao tem nenhuma dependencia: e so biblioteca padrao.
+# Isto aqui e so para servir a API em producao.
+gunicorn>=21.2

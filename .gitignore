@@ -1,0 +1,26 @@
+# Núcleo em C: o fonte fica versionado, o binário não.
+# Cada máquina compila o seu com native/build.sh (Linux/macOS) ou build.bat (Windows).
+native/*.dll
+native/*.so
+native/*.dylib
+native/*.o
+native/*.obj
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Editores e sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Saídas geradas ao usar o programa
+*_perfboard.json
+solda.svg
+componentes.svg

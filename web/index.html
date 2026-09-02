@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perfboard Router</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Perfboard Router</h1>
+  <span class="sub">KiCad <code>.net</code> &rarr; layout de perfboard com trilhas e jumpers</span>
+  <span class="spacer"></span>
+  <span id="status" class="status">carregue uma netlist</span>
+</header>
+
+<main>
+
+  <aside id="side">
+    <section>
+      <h2>1. Netlist<span class="ajuda" tabindex="0" aria-label="ajuda">?<span class="dica">
+        No KiCad: <em>Esquemático &rarr; Arquivo &rarr; Exportar &rarr; Netlist &rarr; KiCad</em>.<br><br>
+        O <b>Projeto (.json)</b> exportado volta por aqui e restaura posições, travas e ajustes.
+      </span></span></h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".net,.xml,.txt,.json" hidden>
+        <strong>Solte o .net ou o projeto .json aqui</strong>
+        <span>ou clique para escolher</span>
+      </label>
+      <div id="srcinfo" class="srcinfo"></div>
+      <div id="sessaoInfo" class="srcinfo"></div>
+    </section>
+
+    <section>
+      <h2>2. Perfboard</h2>
+      <div class="grid2">
+        <label>Colunas <input type="number" id="cols" min="4" max="200" value="20"></label>
+        <label>Linhas <input type="number" id="rows" min="4" max="200" value="16"></label>
+        <label>Margem (furos) <input type="number" id="margin" min="0" max="10" value="0"></label>
+        <label>Zoom <input type="number" id="scale" min="12" max="60" value="30"></label>
+      </div>
+      <label>Nomes dos furos
+        <select id="labelStyle">
+          <option value="letra" selected>linha A,B,C… / coluna 1,2,3… (como vem impresso)</option>
+          <option value="numerica">numérico (coluna, linha) começando em 0</option>
+        </select>
+      </label>
+      <div id="boardmm" class="hint"></div>
+      <div class="row">
+        <button id="fitBoard" class="ghost">Sugerir tamanho</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Posicionamento</h2>
+      <label class="check"><input type="checkbox" id="edgePull" checked> Puxar conectores para a borda</label>
+      <label>Quando parar<span class="ajuda" tabindex="0" aria-label="ajuda">?<span class="dica">
+        Cada tentativa é um sorteio novo e independente, e ele tenta <b>sem limite</b> até
+        fechar 100%.<br><br>
+        Depois de fechar, continua caçando uma montagem mais fácil — menos quinas, vias e
+        jumpers — e para sozinho quando a melhora <b>estaciona</b>. O gráfico à direita
+        mostra essa curva.<br><br>
+        <b>Parar</b> interrompe a qualquer momento e mantém o melhor encontrado até ali.
+      </span></span>
+        <select id="modoBusca">
+          <option value="otimizar" selected>continuar melhorando até estacionar</option>
+          <option value="primeiro">parar na primeira que fecha 100%</option>
+        </select>
+      </label>
+    </section>
+
+    <section>
+      <h2>4. Roteamento</h2>
+      <label>Tipo de placa<span class="ajuda" tabindex="0" aria-label="ajuda">?<span
+        class="dica" id="facesHint"></span></span>
+        <select id="faces">
+          <option value="1" selected>perfboard de 1 face</option>
+          <option value="2">perfboard de 2 faces</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="allowJumpers" checked> Permitir jumpers (fio isolado sobrevoando)</label>
+      <label>Onde economizar<span class="ajuda" tabindex="0" aria-label="ajuda">?<span class="dica">
+        Dobra e jumper são <b>substitutos</b>: fugir de uma joga trabalho na outra. Não dá
+        para minimizar as duas — dá para escolher de que lado ficar.<br>
+        Medido num circuito de 26 peças em 24&times;18:
+        <table class="tradeoff">
+          <tr><th></th><th>dobras</th><th>jumpers</th></tr>
+          <tr><td>menos jumpers</td><td>38</td><td><b>10</b></td></tr>
+          <tr><td>equilibrado</td><td>28</td><td>13</td></tr>
+          <tr><td>menos dobras</td><td><b>18</b></td><td>19</td></tr>
+        </table>
+      </span></span>
+        <select id="preset">
+          <option value="menos_jumpers">menos jumpers — aceita mais dobras</option>
+          <option value="equilibrado" selected>equilibrado</option>
+          <option value="menos_quinas">menos dobras — aceita mais jumpers</option>
+        </select>
+      </label>
+      <label>Comprimento máximo de cada jumper (furos)<span class="ajuda" tabindex="0"
+        aria-label="ajuda">?<span class="dica">
+        O tamanho do fio, não a quantidade. Nenhum jumper vai ser mais comprido que isso —
+        14 furos &asymp; 35 mm.
+      </span></span>
+        <input type="number" id="maxJumper" min="2" max="60" value="14"></label>
+      <label>Quantidade máxima de jumpers na placa<span class="ajuda" tabindex="0"
+        aria-label="ajuda">?<span class="dica">
+        Quantos jumpers a placa inteira pode ter. Deixe vazio para não limitar — é bem mais
+        rápido.<br><br>
+        Preenchendo, o sistema encarece o jumper sozinho até caber no número, o que custa
+        algumas passadas a mais. <b>0</b> = nenhum jumper.<br><br>
+        Se o teto for impossível sem deixar pino solto, ele avisa qual foi o mínimo que
+        fechou tudo, em vez de entregar layout quebrado.
+      </span></span>
+        <input type="number" id="maxJumpers" min="0" max="200" placeholder="sem limite"></label>
+    </section>
+
+    <section class="actions">
+      <button id="run" class="primary">Posicionar + rotear</button>
+      <label class="check"><input type="checkbox" id="autoReroute" checked> Rotear ao mover peça</label>
+    </section>
+
+    <section>
+      <h2>Exportar</h2>
+      <div class="row wrap">
+        <button class="ghost" data-export="top">SVG componentes</button>
+        <button class="ghost" data-export="bottom">SVG solda</button>
+        <button class="ghost" data-export="json">Projeto (.json)</button>
+        <button class="ghost" data-export="txt">Guia de montagem</button>
+      </div>
+    </section>
+  </aside>
+
+  <section id="canvas">
+    <div class="tabs">
+      <button class="tab active" data-view="both">Os dois lados</button>
+      <button class="tab" data-view="top">Lado dos componentes</button>
+      <button class="tab" data-view="bottom">Lado da solda</button>
+      <span class="spacer"></span>
+      <span class="legend">
+        <i class="sw trace"></i> trilha (solda) &nbsp;
+        <i class="sw jump"></i> jumper (por cima) &nbsp;
+        <i class="sw lock"></i> travado
+      </span>
+    </div>
+    <div id="overlay" class="overlay" hidden aria-live="polite">
+      <div class="overlay-card">
+        <div class="spinner" role="status" aria-label="roteando"></div>
+        <div class="overlay-txt" id="overlayTxt">Roteando…</div>
+        <div class="overlay-sub" id="overlaySub">começando…</div>
+        <div class="overlay-placar" id="overlayPlacar"></div>
+        <div class="overlay-medida" id="overlayMedida"></div>
+        <div class="overlay-curva" id="overlayCurva"></div>
+        <div class="overlay-nota" id="overlayNota"></div>
+        <div class="overlay-tempo" id="overlayTempo">0 s</div>
+        <button id="overlayParar" class="ghost">Parar</button>
+      </div>
+    </div>
+
+    <div id="views">
+      <figure id="viewTop"><figcaption>Lado dos componentes — arraste as peças, <kbd>R</kbd> gira, <kbd>L</kbd> trava</figcaption><div class="svgbox"></div></figure>
+      <figure id="viewBottom"><figcaption>Lado da solda (espelhado) — é assim que você vê ao soldar</figcaption><div class="svgbox"></div></figure>
+    </div>
+  </section>
+
+  <aside id="info">
+    <section id="stats"></section>
+    <section id="issues"></section>
+    <section>
+      <h2>Desacoplamento</h2>
+      <div id="decoup"></div>
+      <div class="row wrap" style="margin-top:8px">
+        <select id="decoupCap" title="capacitor"></select>
+        <span class="hint" style="margin:0">perto de</span>
+        <select id="decoupIc" title="CI"></select>
+        <button id="decoupAdd" class="ghost">Vincular</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Componentes</h2>
+      <div id="complist" class="complist"></div>
+    </section>
+    <section>
+      <h2>Roteiro de montagem</h2>
+      <div id="build" class="build"></div>
+    </section>
+  </aside>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
