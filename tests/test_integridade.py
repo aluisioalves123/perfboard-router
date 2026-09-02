@@ -388,6 +388,55 @@ class TestIntegridade(unittest.TestCase):
         self.assertEqual(pequeno["layout"]["footprints"]["U1"]["margins"],
                          grande["layout"]["footprints"]["U1"]["margins"])
 
+    def test_peca_axial_ganha_folga_para_a_dobra(self):
+        """Resistor de 1/4W tem que assentar em 4 furos, nao em 3.
+
+        O passo do footprint do KiCad e o da PCB, onde a dobra e feita por maquina
+        rente ao corpo. Um DIN0207 em 3 furos deixa 0,6 mm entre o corpo e o furo:
+        o terminal sai forcando e a peca nao assenta. A regra sai do comprimento do
+        corpo mais a folga da dobra dos dois lados.
+        """
+        from perfboard.footprints import infer
+
+        def vao(fp):
+            d = infer(fp, ["1", "2"], "X1")
+            return max(x for x, _y in d.pins.values())
+
+        # o caso que motivou a regra: 1/4W nominal 7,62 mm
+        self.assertEqual(vao("Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal"), 4)
+        # ja folgado, fica como esta
+        self.assertEqual(vao("Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"), 4)
+        # corpo maior pede mais espaco; corpo menor pede menos
+        self.assertEqual(vao("Resistor_THT:R_Axial_DIN0411_L9.9mm_D3.6mm_P12.70mm_Horizontal"), 5)
+        self.assertEqual(vao("Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P5.08mm_Horizontal"), 3)
+        # sem a medida do corpo no nome, o piso e o resistor de sempre
+        self.assertEqual(vao("Diode_THT:D_DO-41_SOD81_P7.62mm_Horizontal"), 4)
+
+    def test_peca_radial_nao_e_alargada(self):
+        """Disco, eletrolitico e LED ja saem com os terminais para baixo.
+
+        Nao ha dobra a acomodar, entao abrir o passo deles so afastaria os furos a
+        toa - e um capacitor de desacoplamento longe do CI e justamente o que o
+        posicionador passa o dia tentando evitar.
+        """
+        from perfboard.footprints import infer
+
+        for fp in ("Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P2.50mm",
+                   "Capacitor_THT:CP_Radial_D5.0mm_P2.50mm",
+                   "LED_THT:LED_D5.0mm_P2.54mm"):
+            d = infer(fp, ["1", "2"], "X1")
+            self.assertEqual(max(x for x, _y in d.pins.values()), 1,
+                             "%s foi alargado sem precisar" % fp)
+
+    def test_passo_aberto_e_avisado(self):
+        """Mudar a peca do usuario em silencio nao vale: ele precisa saber e poder
+        discordar pelo editor da lista de componentes."""
+        from perfboard.footprints import infer
+
+        d = infer("Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",
+                  ["1", "2"], "R1")
+        self.assertTrue(any("passo aberto" in w for w in d.warnings), d.warnings)
+
     def _furos(self, res, ref):
         return sorted((p["pin"], p["col"], p["row"])
                       for p in res["layout"]["pins"] if p["ref"] == ref)

@@ -92,6 +92,33 @@ def _pitch_from_name(name: str):
     return float(m.group(1)) if m else None
 
 
+# Folga entre a ponta do corpo e o furo, de cada lado, para a dobra de 90 graus
+# feita a mao. Menos que isso e o terminal sai forcando do corpo.
+FOLGA_DOBRA_MM = 1.9
+
+# Peca axial: terminais saem das PONTAS e precisam ser dobrados para descer ate a
+# placa. Peca radial (disco, eletrolitico, LED) ja tem os terminais para baixo e
+# nao entra nesta conta - alargar o passo dela so afastaria os furos a toa.
+AXIAIS = ("R_Axial", "C_Axial", "L_Axial", "D_DO", "D_A-405", "Varistor")
+
+
+def _passo_axial(name: str, passo_nominal: int):
+    """Passo minimo que deixa a peca axial assentar, em furos.
+
+    Sai do comprimento do corpo no proprio nome do footprint (`_L6.3mm`) mais a
+    folga da dobra dos dois lados. Sem essa medida no nome, usa 4 furos: e o que
+    assenta o resistor de 1/4W, que e a peca axial que aparece em quase todo
+    circuito.
+    """
+    corpo = re.search(r"_L(\d+(?:\.\d+)?)mm", name)
+    if corpo:
+        preciso = float(corpo.group(1)) + 2 * FOLGA_DOBRA_MM
+        minimo = max(1, int(round(preciso / PITCH_MM)))
+    else:
+        minimo = 4
+    return max(passo_nominal, minimo)
+
+
 def _row(pins, pitch_holes, axis="x"):
     """Distribui os pinos em linha, com o passo dado."""
     out = {}
@@ -252,6 +279,14 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "") -> FootprintDef:
                 "pitch %.2fmm nao cai na grade; usando %d furo(s) (%.2fmm) - dobre os terminais"
                 % (pitch, step, step * PITCH_MM)
             )
+        if any(k in name for k in AXIAIS):
+            aberto = _passo_axial(name, step)
+            if aberto != step:
+                d.warnings.append(
+                    "passo aberto de %d para %d furos: peca axial precisa de espaco para "
+                    "dobrar o terminal. Ajuste no botao da lista se a sua for diferente."
+                    % (step, aberto))
+                step = aberto
         d.pins = {pins[0]: (0, 0), pins[1]: (step, 0)}
         d.label = "2 terminais, passo %d furo(s)" % step
         return d
