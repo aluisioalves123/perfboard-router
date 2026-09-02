@@ -651,7 +651,7 @@ function renderComponents() {
       const linha = `<div class="crow${S.selected === p.ref ? ' sel' : ''}" data-ref="${p.ref}">
         <b>${p.ref}</b>
         <span class="meta" title="${fp.key || ''}">${mm} · ${holeLabel(p.col, p.row)} · ${p.rot}°</span>
-        <button data-act="size" class="${ajustado ? 'on' : ''}" title="tamanho real da peça">⤡</button>
+        <button data-act="size" class="${ajustado ? 'on' : ''}" title="medidas reais da peça">⤡</button>
         <button data-act="rot" title="girar 90°">⟳</button>
         <button data-act="lock" class="${p.locked ? 'on' : ''}" title="travar posição">${p.locked ? '🔒' : '🔓'}</button>
       </div>`;
@@ -661,15 +661,21 @@ function renderComponents() {
   $('#complist').innerHTML = html;
 }
 
-// Editor do tamanho real da peça: quantos furos o corpo passa dos pinos em cada
-// lado. O footprint do KiCad acerta os terminais, mas não diz o volume do bicho -
-// um borne Phoenix avança bem para trás dos parafusos.
+// Editor das medidas reais da peça. Duas coisas, porque o footprint do KiCad erra
+// as duas de jeitos diferentes:
+//
+//   1. o AFASTAMENTO DOS TERMINAIS - um poliester de 100nF tem as pernas bem mais
+//      abertas que um cerâmico do mesmo valor, porque o corpo é maior;
+//   2. o TAMANHO DO CORPO - o footprint diz onde ficam os furos, não o volume do
+//      bicho; um borne Phoenix avança bem para trás dos parafusos.
 function editorTamanho(ref, fp) {
-  const m = (S.overrides[ref] && S.overrides[ref].margins) || fp.margins || [0, 0, 0, 0];
+  const ov = S.overrides[ref] || {};
+  const m = ov.margins || fp.margins || [0, 0, 0, 0];
   const campo = (i, titulo) =>
     `<input type="number" min="0" max="30" value="${m[i]}" data-margin="${i}" title="${titulo}">`;
   const medida = fp.body_mm ? `${fp.body_mm[0]}<br>×<br>${fp.body_mm[1]} mm` : '';
   return `<div class="sizer" data-ref="${ref}">
+    ${editorPinos(ref, fp, ov)}
     <div class="sizer-help">Furos que o corpo ocupa <b>além dos pinos</b>, em cada lado,
       na orientação original da peça. Gire depois com ⟳.</div>
     <div class="sizer-grid">
@@ -683,6 +689,38 @@ function editorTamanho(ref, fp) {
       <button data-act="size-reset" data-ref="${ref}" class="ghost">Voltar ao deduzido</button>
       <button data-act="size-close" class="ghost">Fechar</button>
     </div>
+  </div>`;
+}
+
+// Afastamento dos terminais, em furos. Guardamos passo/largura em vez das
+// coordenadas de cada pino: é o número que a pessoa mede na peça com uma régua, e
+// não há como gerar um padrão incoerente a partir dele.
+function editorPinos(ref, fp, ov) {
+  const a = fp.arranjo || {};
+  if (!a.tipo || a.tipo === 'irregular') {
+    return `<div class="sizer-help">Os terminais desta peça não formam uma fileira
+      regular, então não há um passo único para ajustar.</div>`;
+  }
+  const passo = ov.passo !== undefined ? ov.passo : a.passo;
+  const largura = ov.largura !== undefined ? ov.largura : a.largura;
+  const mm = (n) => (n * 2.54).toFixed(2).replace('.', ',');
+
+  const linha = (chave, valor, rotulo, dica) => `<label class="pin-campo" title="${dica}">
+      <span>${rotulo}</span>
+      <input type="number" min="${chave === 'largura' ? 0 : 1}" max="40" value="${valor}"
+             data-${chave}="1">
+      <em data-mm-de="${chave}">${mm(valor)} mm</em>
+    </label>`;
+
+  return `<div class="sizer-pinos">
+    <div class="sizer-help">Distância entre os <b>furos dos terminais</b>. Meça a peça
+      real: cada furo da perfboard vale 2,54 mm.</div>
+    ${linha('passo', passo, a.fileiras > 1 ? 'entre pinos vizinhos' : 'entre os terminais',
+            'quantos furos separam um terminal do seguinte')}
+    ${a.fileiras > 1
+      ? linha('largura', largura, 'entre as fileiras', 'quantos furos separam as duas fileiras')
+      : ''}
+    ${fp.pin_note ? `<div class="sizer-note">${fp.pin_note}</div>` : ''}
   </div>`;
 }
 
@@ -1201,6 +1239,15 @@ function bind() {
     }).catch(() => { if (S.aborto) S.aborto.abort(); });
   });
 
+  // mostra a medida em mm enquanto a pessoa digita: ninguém pensa em "furos"
+  $('#complist').addEventListener('input', (e) => {
+    const campo = e.target.closest('input[data-passo], input[data-largura]');
+    if (!campo) return;
+    const chave = campo.dataset.passo !== undefined ? 'passo' : 'largura';
+    const alvo = campo.closest('.pin-campo').querySelector(`[data-mm-de="${chave}"]`);
+    if (alvo) alvo.textContent = ((+campo.value || 0) * 2.54).toFixed(2).replace('.', ',') + ' mm';
+  });
+
   $('#complist').addEventListener('click', (e) => {
     const act = e.target.dataset.act;
 
@@ -1212,12 +1259,18 @@ function bind() {
       } else {
         const caixa = document.querySelector(`.sizer[data-ref="${ref}"]`);
         const margens = [0, 0, 0, 0];
+        const novo = {};
         if (caixa) {
           caixa.querySelectorAll('input[data-margin]').forEach((c) => {
             margens[+c.dataset.margin] = Math.max(0, Math.min(30, +c.value || 0));
           });
+          const passo = caixa.querySelector('input[data-passo]');
+          const largura = caixa.querySelector('input[data-largura]');
+          if (passo) novo.passo = Math.max(1, Math.min(40, +passo.value || 1));
+          if (largura) novo.largura = Math.max(0, Math.min(40, +largura.value || 0));
         }
-        S.overrides[ref] = Object.assign({}, S.overrides[ref], { margins: margens });
+        novo.margins = margens;
+        S.overrides[ref] = Object.assign({}, S.overrides[ref], novo);
       }
       S.editing = null;
       run(false, false);

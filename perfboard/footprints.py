@@ -34,6 +34,7 @@ class FootprintDef:
     # sem isso o sistema deixaria outra peca encostar onde ha corpo.
     margins: tuple = (0, 0, 0, 0)
     body_note: str = ""                       # de onde veio a medida, para a interface
+    pin_note: str = ""                        # idem, para o afastamento dos terminais
 
     @property
     def extent(self):
@@ -74,6 +75,8 @@ class FootprintDef:
             "body_mm": [round(self.body_size[0] * PITCH_MM, 1),
                         round(self.body_size[1] * PITCH_MM, 1)],
             "body_note": self.body_note,
+            "pin_note": self.pin_note,
+            "arranjo": arranjo_dos_pinos(self.pins),
         }
 
 
@@ -304,6 +307,98 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "") -> FootprintDef:
     return d
 
 
+def arranjo_dos_pinos(pins: dict) -> dict:
+    """Le o padrao como uma pessoa leria: fileiras, passo e largura.
+
+    `tipo`:
+      "linha"    - todos os terminais numa fileira so (resistor, capacitor, TO-92)
+      "fileiras" - duas fileiras paralelas (DIP, barra 2xN)
+      "irregular"- qualquer outra coisa; a interface nao oferece ajuste, porque
+                   mexer no passo geraria um desenho que nao corresponde a peca
+                   nenhuma
+
+    `eixo` diz para que lado a fileira corre ("x" ou "y"). Precisa existir porque
+    um DIP deduzido tem as duas fileiras separadas em x, correndo em y - e um
+    header 2xN pode vir do outro jeito.
+    """
+    def regular(vals):
+        vals = sorted(vals)
+        vaos = {b - a for a, b in zip(vals, vals[1:])}
+        return len(vaos) <= 1
+
+    def passo_de(vals):
+        vals = sorted(vals)
+        if len(vals) < 2:
+            return 1
+        return max(1, (vals[-1] - vals[0]) // (len(vals) - 1))
+
+    vazio = {"tipo": "irregular", "eixo": "x", "passo": 1, "largura": 0,
+             "fileiras": 1, "vao_total": 0}
+    if len(pins) < 2:
+        return vazio
+
+    xs = sorted({dx for dx, _dy in pins.values()})
+    ys = sorted({dy for _dx, dy in pins.values()})
+
+    # uma fileira so
+    if len(ys) == 1:
+        return {"tipo": "linha" if regular(xs) else "irregular", "eixo": "x",
+                "passo": passo_de(xs), "largura": 0, "fileiras": 1,
+                "vao_total": xs[-1] - xs[0]}
+    if len(xs) == 1:
+        return {"tipo": "linha" if regular(ys) else "irregular", "eixo": "y",
+                "passo": passo_de(ys), "largura": 0, "fileiras": 1,
+                "vao_total": ys[-1] - ys[0]}
+
+    # duas fileiras: o eixo com DOIS valores distintos e o que as separa
+    for eixo, sep, corre in (("y", xs, ys), ("x", ys, xs)):
+        if len(sep) != 2:
+            continue
+        grupos = {}
+        for dx, dy in pins.values():
+            chave = dx if eixo == "y" else dy
+            grupos.setdefault(chave, []).append(dy if eixo == "y" else dx)
+        iguais = len({len(v) for v in grupos.values()}) == 1
+        todas_regulares = all(regular(v) for v in grupos.values())
+        return {"tipo": "fileiras" if (iguais and todas_regulares) else "irregular",
+                "eixo": eixo, "passo": passo_de(corre),
+                "largura": sep[1] - sep[0], "fileiras": 2,
+                "vao_total": corre[-1] - corre[0]}
+
+    return dict(vazio, fileiras=len(ys))
+
+
+def redistribui_pinos(d: FootprintDef, passo=None, largura=None) -> bool:
+    """Reposiciona os terminais com outro passo, mantendo a numeracao.
+
+    Cada pino guarda seu lugar (que fileira, que posicao dentro dela) e so o
+    espacamento muda - assim o pino 1 continua sendo o pino 1. Devolve False para
+    padrao irregular, onde nao ha passo unico que faca sentido.
+    """
+    arranjo = arranjo_dos_pinos(d.pins)
+    if arranjo["tipo"] == "irregular":
+        return False
+
+    passo = arranjo["passo"] if passo is None else max(1, min(40, int(passo)))
+    largura = arranjo["largura"] if largura is None else max(0, min(40, int(largura)))
+    ao_longo_de_x = arranjo["eixo"] == "x"
+
+    # (valor que separa as fileiras) -> pinos daquela fileira, em ordem
+    grupos = {}
+    for pino, (dx, dy) in d.pins.items():
+        chave = dy if ao_longo_de_x else dx
+        grupos.setdefault(chave, []).append((dx if ao_longo_de_x else dy, pino))
+
+    novos = {}
+    for i_fileira, chave in enumerate(sorted(grupos)):
+        for i_pos, (_v, pino) in enumerate(sorted(grupos[chave])):
+            desloca = i_fileira * largura
+            novos[pino] = ((i_pos * passo, desloca) if ao_longo_de_x
+                           else (desloca, i_pos * passo))
+    d.pins = novos
+    return True
+
+
 def aplica_override(d: FootprintDef, spec: dict) -> FootprintDef:
     """Aplica ajustes do usuario por cima do que foi deduzido.
 
@@ -317,6 +412,17 @@ def aplica_override(d: FootprintDef, spec: dict) -> FootprintDef:
     if pins:
         d.pins = {str(pin): (int(off[0]), int(off[1])) for pin, off in pins.items()}
         d.inferred = False
+
+    # Passo dos terminais. Vem antes das margens de proposito: o corpo e medido a
+    # partir do retangulo dos pinos, entao mexer no passo depois moveria o corpo junto.
+    if spec.get("passo") is not None or spec.get("largura") is not None:
+        try:
+            mexeu = redistribui_pinos(d, spec.get("passo"), spec.get("largura"))
+        except (TypeError, ValueError):
+            mexeu = False
+        if mexeu:
+            d.inferred = False
+            d.pin_note = "afastamento ajustado por voce"
 
     margens = spec.get("margins")
     if margens is not None:

@@ -388,6 +388,78 @@ class TestIntegridade(unittest.TestCase):
         self.assertEqual(pequeno["layout"]["footprints"]["U1"]["margins"],
                          grande["layout"]["footprints"]["U1"]["margins"])
 
+    def _furos(self, res, ref):
+        return sorted((p["pin"], p["col"], p["row"])
+                      for p in res["layout"]["pins"] if p["ref"] == ref)
+
+    @staticmethod
+    def _vao(furos):
+        """Maior distancia entre furos, em qualquer direcao.
+
+        A peca pode estar girada: medir so as colunas daria zero para uma peca
+        em pe, e o teste passaria sem testar nada.
+        """
+        cols = [c for _p, c, _r in furos]
+        rows = [r for _p, _c, r in furos]
+        return max(max(cols) - min(cols), max(rows) - min(rows))
+
+    def test_afastamento_dos_terminais_e_ajustavel(self):
+        """Um poliester de 100nF tem as pernas mais abertas que um ceramico.
+
+        O footprint do KiCad da o passo nominal; a peca que a pessoa comprou pode
+        ter outro, e ela precisa poder dizer isso.
+        """
+        base = self.solve_case()
+        pos = [dict(p) for p in base["layout"]["placements"]]
+        largo = self.solve_case(placements=pos, auto_place=False,
+                                overrides={"C2": {"passo": 5}})
+
+        antes, depois = self._furos(base, "C2"), self._furos(largo, "C2")
+        self.assertEqual(self._vao(depois), 5, "o passo pedido nao chegou nos furos")
+        self.assertGreater(self._vao(depois), self._vao(antes))
+        self.assertEqual(len(depois), len(antes), "nao pode ganhar nem perder terminal")
+        self.assertEqual(self._furos(base, "U1"), self._furos(largo, "U1"),
+                         "mexer numa peca nao pode mexer nas outras")
+        self.assert_tudo(largo)
+
+    def test_passo_maior_mantem_a_numeracao_dos_pinos(self):
+        """Abrir as pernas nao pode trocar pino 1 com pino 2 - inverteria a peca.
+
+        Num DIP isso seria pior ainda: alargar a pastilha trocaria a pinagem
+        inteira, e o circuito montado ficaria errado sem nenhum aviso.
+        """
+        from perfboard.footprints import arranjo_dos_pinos, infer, aplica_override
+
+        casos = [
+            ("Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", ["1", "2"], {"passo": 6}),
+            ("Package_TO_SOT_THT:TO-92_Inline", ["1", "2", "3"], {"passo": 2}),
+            ("Package_DIP:DIP-8_W7.62mm", [str(i) for i in range(1, 9)], {"largura": 6}),
+        ]
+        for fp, pinos, ajuste in casos:
+            antes = infer(fp, pinos, "X1")
+            depois = aplica_override(infer(fp, pinos, "X1"), dict(ajuste))
+            self.assertEqual(set(antes.pins), set(depois.pins), fp)
+
+            # a ordem relativa dos pinos em cada eixo tem que ser a mesma
+            def ordem(d):
+                return sorted(d.pins, key=lambda k: (d.pins[k][1], d.pins[k][0]))
+            self.assertEqual(ordem(antes), ordem(depois),
+                             "%s: a numeracao mudou de lugar" % fp)
+
+            a = arranjo_dos_pinos(depois.pins)
+            for chave, valor in ajuste.items():
+                self.assertEqual(a[chave], valor, "%s: %s nao foi aplicado" % (fp, chave))
+
+    def test_padrao_irregular_nao_aceita_passo(self):
+        """Sem fileira regular nao existe passo unico: melhor recusar que inventar."""
+        from perfboard.footprints import FootprintDef, redistribui_pinos
+
+        torto = FootprintDef(key="x", label="torto",
+                             pins={"1": (0, 0), "2": (3, 1), "3": (1, 5)})
+        self.assertFalse(redistribui_pinos(torto, passo=2))
+        self.assertEqual(torto.pins, {"1": (0, 0), "2": (3, 1), "3": (1, 5)},
+                         "recusou, entao nao podia ter mexido")
+
     def test_corpo_gira_junto_com_a_peca(self):
         """Uma peca funda girada 90 graus fica larga, nao funda."""
         base = self.solve_case(overrides={"J1": {"margins": [0, 0, 0, 3]}})

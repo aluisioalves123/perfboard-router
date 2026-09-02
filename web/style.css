@@ -204,6 +204,11 @@ button.ghost { background: transparent; font-size: 12.5px; padding: 5px 9px; }
 .sizer-grid input { width: 52px; text-align: center; margin: 0; }
 .sizer-mid { font-size: 10.5px; color: var(--dim); text-align: center; line-height: 1.25; }
 .sizer-note { font-size: 11px; color: var(--dim); margin-bottom: 8px; font-style: italic; }
+.sizer-pinos { border-bottom: 1px solid var(--line); margin-bottom: 10px; padding-bottom: 6px; }
+.pin-campo { display: grid; grid-template-columns: 1fr 56px 64px; align-items: center;
+             gap: 6px; margin-bottom: 6px; font-size: 11.5px; }
+.pin-campo input { width: 52px; text-align: center; margin: 0; }
+.pin-campo em { color: var(--dim); font-style: normal; font-size: 11px; }
 
 .tradeoff { width: 100%; border-collapse: collapse; font-size: 11px; color: var(--dim);
             margin: 6px 0 2px; }
