@@ -1,0 +1,42 @@
+# Front do Perfboard Router quando ele roda em container.
+#
+# Mesmo papel do nginx-perfboard.conf: servir os estaticos do disco e mandar so
+# /api para o gunicorn. A diferenca e que aqui nao ha TLS nem dominio - quem
+# termina HTTPS e o proxy de borda da maquina, que encaminha o subcaminho ja
+# desmontado. Por isso `auto_https off`.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	encode zstd gzip
+
+	# ⚠️ `handle` e nao matcher solto: o Caddy executa `try_files` ANTES de
+	# `reverse_proxy` na ordem padrao das diretivas, entao /api/health era
+	# reescrito para /index.html e o cliente recebia a pagina no lugar do JSON.
+	# Blocos `handle` sao mutuamente exclusivos e avaliados na ordem escrita.
+	handle /api/* {
+		# A busca transmite progresso enquanto roda (stream). Com buffer, a tela
+		# do usuario so mexeria no fim - e busca dificil leva dezenas de segundos.
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 180s
+				write_timeout 180s
+			}
+		}
+	}
+
+	handle {
+		root * /app/web
+		try_files {path} {path}/ /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy no-referrer-when-downgrade
+	}
+}

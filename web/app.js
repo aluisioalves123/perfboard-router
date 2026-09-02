@@ -73,7 +73,7 @@ async function api(path, body) {
 async function apiFluxo(corpo, aoProgresso) {
   let res;
   try {
-    res = await fetch('/api/solve', {
+    res = await fetch('api/solve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({ stream: true }, corpo)),
@@ -155,7 +155,7 @@ function fraseProgresso(ev) {
 
 async function servidorVivo() {
   try {
-    const r = await fetch('/api/examples', { method: 'GET' });
+    const r = await fetch('api/examples', { method: 'GET' });
     return r.ok;
   } catch (e) {
     return false;
@@ -401,7 +401,7 @@ async function loadNetlist(text, name, placements) {
   status('lendo netlist...', 'busy');
   mostraVeu('Lendo a netlist…');
   try {
-    S.analysis = await api('/api/analyze', { netlist: text });
+    S.analysis = await api('api/analyze', { netlist: text });
   } catch (e) {
     escondeVeu();
     status('erro: ' + e.message, 'bad');
@@ -1194,7 +1194,7 @@ function bind() {
       if (S.aborto) S.aborto.abort();
       return;
     }
-    fetch('/api/parar', {
+    fetch('api/parar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ job: S.job }),
@@ -1272,7 +1272,7 @@ async function init() {
   }
   try {
     // ping so para saber se o servidor esta de pe; se nao estiver, o catch explica
-    const res = await fetch('/api/examples');
+    const res = await fetch('api/examples');
     if (!res.ok) throw new Error('HTTP ' + res.status);
   } catch (e) {
     const comoAbriu = location.protocol === 'file:'

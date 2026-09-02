@@ -7,3 +7,9 @@
 *.service   text eol=lf
 *.conf      text eol=lf
 *.bat       text eol=crlf
+
+# Mesma razao para os arquivos da variante em container: o Caddy e o Docker leem
+# estes dentro do Linux, e CRLF vindo de um clone no Windows quebraria os dois.
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+Caddyfile*  text eol=lf

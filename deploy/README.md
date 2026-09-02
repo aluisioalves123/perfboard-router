@@ -196,3 +196,82 @@ auth_basic_user_file /etc/nginx/.perfboard;
   (tem teste para travessia de diretório).
 - Erro interno nunca devolve stack trace ao cliente — vai só para o log.
 - Não há upload persistido: a netlist vive na memória durante a requisição e some.
+
+---
+
+# Variante: atrás de um proxy que já existe, num subcaminho
+
+O roteiro acima assume uma máquina só para o Perfboard: nginx do lado de fora e
+systemd do lado de dentro. Quando o servidor já é compartilhado com outros
+projetos, e a porta 443 já tem dono, o caminho é outro:
+
+```
+navegador ──HTTPS──> proxy de borda (já existe) ──> web (caddy) ──┬──> /app/web  (estáticos)
+                     hardware.EXEMPLO.com.br/perfboard-router     └──> api (gunicorn)
+```
+
+Os arquivos desta variante são `Dockerfile`, `docker-compose.yml` e
+`Caddyfile.perfboard`, todos aqui em `deploy/`. Sobe com:
+
+```bash
+cd deploy && docker compose up -d
+```
+
+## Por que um compose próprio, e não um serviço no compose do vizinho
+
+Projeto separado sobe, cai e atualiza sem nunca tocar no que mais roda na
+máquina. O único ponto de contato é a rede do proxy de borda, declarada
+`external:` — este compose **usa**, nunca cria nem remove. E só o container
+`web` entra nela, com apelido explícito: sem isso o nome dele naquela rede
+compartilhada seria `web`, genérico demais.
+
+## O subcaminho exige caminho relativo no front
+
+Servir em `/perfboard-router/` em vez da raiz de um subdomínio parece detalhe de
+proxy, mas quebra o front se ele referenciar `/style.css`, `/app.js` e
+`/api/solve` com a barra inicial: tudo isso resolve na **raiz do domínio** e
+volta 404. Por isso `index.html` e `app.js` usam caminho relativo
+(`style.css`, `api/solve`), que funciona nos dois lugares — na raiz durante o
+desenvolvimento, e sob o prefixo em produção.
+
+⚠️ **Caminho relativo exige a barra final.** Em `/perfboard-router` (sem barra),
+`api/solve` resolveria para `/api/solve`, na raiz do domínio. O bloco da borda
+redireciona `/perfboard-router` para `/perfboard-router/` justamente por isso.
+
+⚠️ **`handle` e não matcher solto, no Caddy.** A ordem padrão das diretivas
+executa `try_files` **antes** de `reverse_proxy`, então `/api/health` era
+reescrito para `/index.html` e o cliente recebia a página HTML no lugar do JSON.
+Blocos `handle` são mutuamente exclusivos e avaliados na ordem em que aparecem.
+
+⚠️ **`flush_interval -1` nos dois saltos.** A busca transmite progresso enquanto
+roda; com o buffer do proxy, a tela do usuário só se mexeria no fim, e uma busca
+difícil leva dezenas de segundos.
+
+## O código não entra na imagem
+
+A imagem tem só o interpretador e o gunicorn; o código chega por bind mount
+somente-leitura. Atualizar é `git pull` e reiniciar, sem rebuild:
+
+```bash
+cd /opt/perfboard && git pull
+cd deploy && docker compose restart api
+```
+
+O `gcc` fica na imagem de propósito: o núcleo em C é compilado **lá dentro**,
+contra a mesma libc que vai executá-lo. Binário compilado no host pode exigir uma
+glibc mais nova que a da imagem e simplesmente não carregar — e a falha é
+silenciosa, porque o núcleo em C é opcional e o programa cai no Python puro sem
+avisar. Depois de mexer em `native/`:
+
+```bash
+docker run --rm -v /opt/perfboard:/app -w /app/native perfboard:latest sh ./build.sh
+cd deploy && docker compose restart api
+```
+
+## Teto de CPU não é opcional em máquina compartilhada
+
+`os.cpu_count()` **não enxerga** limite de container: numa máquina de 8 vCPU o
+app continua achando que tem as 8, e `MAX_SIMULTANEOS` nasce 7 mesmo com o
+container preso em 2. Quem segura de verdade é o `cpus:` do compose, que é teto
+de kernel. Sem ele, uma busca grande num endpoint público abre processo até
+encher a máquina e os projetos vizinhos ficam lentos sem motivo aparente.

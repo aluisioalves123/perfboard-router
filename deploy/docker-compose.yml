@@ -1,0 +1,62 @@
+# Perfboard Router - projeto proprio, sem relacao com o que mais roda na maquina.
+#
+# Fica num compose separado de proposito: assim `docker compose` daqui sobe,
+# derruba e atualiza o perfboard sem nunca tocar nos outros projetos da VPS.
+# O unico ponto de contato e a rede do proxy de borda, que termina o HTTPS -
+# so o container `web` entra nela, e com apelido explicito.
+name: perfboard
+
+services:
+  # gunicorn + motor de roteamento. Nao fala com a internet: so o `web` o alcanca.
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: perfboard:latest
+    volumes:
+      # Codigo por bind mount: atualizar e `git pull` + restart, sem rebuild.
+      # Somente leitura - nao ha banco, sessao nem upload persistido.
+      - ..:/app:ro
+    environment:
+      PERFBOARD_BIND: "0.0.0.0:8000"
+      # 2 workers x ate 2 nucleos por busca cabe no teto de `cpus` abaixo.
+      PERFBOARD_WORKERS: "2"
+    # Roteamento e CPU-bound e o endpoint e publico: sem teto, uma busca grande
+    # abriria processo ate encher as vCPUs e os vizinhos de maquina ficariam
+    # lentos sem motivo aparente. `cpus` e teto de kernel, entao vale mesmo com
+    # o app achando que tem a maquina inteira (os.cpu_count nao enxerga limite).
+    cpus: 2.0
+    mem_limit: 1g
+    restart: unless-stopped
+    networks:
+      - interna
+
+  # Serve os estaticos e manda so /api para o gunicorn - o papel que o nginx
+  # cumpre no deploy dedicado (deploy/nginx-perfboard.conf).
+  web:
+    image: caddy:2-alpine
+    volumes:
+      # ⚠️ Monta o DIRETORIO, nunca o arquivo. Bind mount de arquivo unico prende
+      # o inode: `git pull` e editores criam arquivo novo e renomeiam, e o
+      # container fica presa ao arquivo antigo, orfao. A alteracao some sem erro.
+      - ..:/app:ro
+    command: caddy run --config /app/deploy/Caddyfile.perfboard --adapter caddyfile
+    depends_on:
+      - api
+    mem_limit: 128m
+    restart: unless-stopped
+    networks:
+      interna:
+      borda:
+        # Sem apelido o nome nesta rede seria `web`, generico demais numa rede
+        # compartilhada com outros projetos.
+        aliases:
+          - perfboard-web
+
+networks:
+  interna:
+  # Rede do proxy de borda da VPS, criada por outro projeto. Declarada externa:
+  # este compose usa, nunca cria nem remove.
+  borda:
+    name: crmpeople_default
+    external: true
