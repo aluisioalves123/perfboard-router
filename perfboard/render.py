@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html
 
-from .board import hole_label, row_letter
+from .board import numeracao, rotulador, row_letter
 
 PALETTE = [
     "#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#008080",
@@ -81,14 +81,19 @@ def _hole_grid(sv):
 
     labels = []
     letra = sv.label_style == "letra"
+    origem = getattr(spec, "label_origin", "TL")
+    # A regua mostra a numeracao IMPRESSA na placa. Se ela corre ao contrario,
+    # e a etiqueta que muda de lugar - o furo continua onde esta.
     step_c = 1 if (letra and sv.s >= 18) else 5
     for c in range(0, spec.cols, step_c):
-        txt = str(c + 1) if letra else str(c)
+        nc, _ = numeracao(c, 0, spec.cols, spec.rows, origem)
+        txt = str(nc + 1) if letra else str(nc)
         labels.append('<text x="%.1f" y="%.1f" font-size="9" fill="#8a7a55" text-anchor="middle">%s</text>'
                       % (sv.x(c), sv.pad - 10, txt))
     step_r = 1 if (letra and sv.s >= 16) else 5
     for r in range(0, spec.rows, step_r):
-        txt = row_letter(r) if letra else str(r)
+        _, nr = numeracao(0, r, spec.cols, spec.rows, origem)
+        txt = row_letter(nr) if letra else str(nr)
         labels.append('<text x="%.1f" y="%.1f" font-size="9" fill="#8a7a55" text-anchor="end" dominant-baseline="middle">%s</text>'
                       % (sv.pad - 10, sv.y(r), txt))
     sv.add("\n".join(labels))
@@ -102,7 +107,14 @@ def _hole_grid(sv):
 
 
 def _draw_segments(sv, routes, kind, opacity, width_mul, dashed=False):
-    out, alerta = [], []
+    """Desenha as trilhas no vocabulario da bancada.
+
+    Fio reto sai como linha com solda nas pontas; furos vizinhos saem como capsula
+    de estanho, sem fio; e todo furo onde dois trechos se encontram ganha o anel de
+    junta. Ver isso no desenho e o que evita a pessoa tentar dobrar um fio numa
+    quina que, na verdade, e um ponto de solda.
+    """
+    out, alerta, solda = [], [], []
     for r in routes:
         col = net_color(r["name"])
         incompleta = not r.get("ok", True)
@@ -112,12 +124,33 @@ def _draw_segments(sv, routes, kind, opacity, width_mul, dashed=False):
             a, b = seg["from"], seg["to"]
             dash = ' stroke-dasharray="5 4"' if dashed else ""
             titulo = r["name"] + (" - REDE INCOMPLETA" if incompleta else "")
+            vao = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+            if vao <= 1 and kind in ("trace", "trace_top"):
+                # Furos vizinhos: nao leva fio, leva estanho. Capsula grossa e curta.
+                out.append(
+                    '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" '
+                    'stroke-width="%.1f" stroke-linecap="round" opacity="%.2f"%s>'
+                    '<title>%s - ponte de solda (furos vizinhos, sem fio)</title></line>'
+                    % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), col,
+                       sv.s * width_mul * 2.1, opacity * 0.85, dash, html.escape(titulo))
+                )
+                continue
+
             out.append(
                 '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="%.1f" '
                 'stroke-linecap="round" opacity="%.2f"%s><title>%s</title></line>'
                 % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), col,
                    sv.s * width_mul, opacity, dash, html.escape(titulo))
             )
+            if kind in ("trace", "trace_top"):
+                # ponta de fio = ponto de solda
+                for ponta in (a, b):
+                    solda.append(
+                        '<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" opacity="%.2f">'
+                        '<title>%s - solda na ponta do fio</title></circle>'
+                        % (sv.x(ponta[0]), sv.y(ponta[1]), sv.s * 0.13, col, opacity,
+                           html.escape(titulo))
+                    )
             if incompleta:
                 # casca vermelha tracejada: pedaco de uma rede que nao fechou
                 alerta.append(
@@ -127,7 +160,32 @@ def _draw_segments(sv, routes, kind, opacity, width_mul, dashed=False):
                     % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), FAIL_COLOR,
                        max(1.6, sv.s * width_mul * 0.45))
                 )
-    sv.add("\n".join(out + alerta))
+    sv.add("\n".join(out + solda + alerta))
+
+
+def _draw_juntas(sv, plano, face, opacity=0.95):
+    """Marca as juntas vindas do plano de montagem - a mesma lista do guia.
+
+    Junta e a quina do desenho, que na bancada e estanho e nao fio dobrado. Marcar
+    isso e o que impede alguem de tentar dobrar um fio num ponto onde, na verdade,
+    encosta o ferro.
+    """
+    out = []
+    for j in plano.get("juntas", ()):
+        if j["face"] != face:
+            continue
+        c, r = j["furo"]
+        out.append(
+            '<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" '
+            'stroke-width="%.1f" opacity="%.2f">'
+            '<title>%s - junta de solda em %s (%s), alcancando %s</title></circle>'
+            % (sv.x(c), sv.y(r), sv.s * 0.26, net_color(j["net"]),
+               max(1.2, sv.s * 0.05), opacity, html.escape(j["net"]),
+               html.escape(j["furo_label"]), j["formato"],
+               html.escape(", ".join(j["toca_labels"])))
+        )
+    if out:
+        sv.add("\n".join(out))
 
 
 def _draw_components(sv, layout, faded=False):
@@ -188,6 +246,7 @@ def _draw_vias(sv, routes, faded=False):
 def _draw_pins(sv, layout, hole_nets, orphans=None):
     """orphans: {(col,row): rede} - pinos que ficaram sem ligacao real."""
     orphans = orphans or {}
+    nome_do_furo = rotulador(layout.spec, sv.label_style)
     out, alerta = [], []
     for ref in sorted(layout.placements):
         for pin, (c, r) in sorted(layout.pin_holes(ref).items()):
@@ -200,7 +259,7 @@ def _draw_pins(sv, layout, hole_nets, orphans=None):
                 % (sv.x(c), sv.y(r), sv.s * 0.24, col,
                    FAIL_COLOR if solto else "#fff", 2.2 if solto else 1.0,
                    html.escape(ref), html.escape(pin),
-                   hole_label(c, r, sv.label_style),
+                   nome_do_furo(c, r),
                    (" - rede " + html.escape(net)) if net else "",
                    " - SEM LIGACAO" if solto else "")
             )
@@ -219,8 +278,14 @@ def _draw_pins(sv, layout, hole_nets, orphans=None):
 
 
 def render_board(layout, routes, side: str = "top", scale: float = 26.0,
-                 hole_nets=None, title: str = "", label_style: str = "letra") -> str:
-    """Gera o SVG de um dos lados da placa."""
+                 hole_nets=None, title: str = "", label_style: str = "letra",
+                 plano=None) -> str:
+    """Gera o SVG de um dos lados da placa.
+
+    `plano` vem de `bancada.plano_de_montagem` e e a MESMA lista que o guia de
+    montagem usa. Passar de fora, em vez de recontar aqui, e o que garante que o
+    desenho e o texto nunca discordem.
+    """
     hole_nets = hole_nets or {}
     orphans = {}
     for r in routes:
@@ -235,12 +300,16 @@ def render_board(layout, routes, side: str = "top", scale: float = 26.0,
         _draw_components(sv, layout)
         _draw_segments(sv, routes, "trace_top", 0.95, 0.20)
         _draw_segments(sv, routes, "jumper", 0.95, 0.13)
+        if plano:
+            _draw_juntas(sv, plano, "componentes")
         _draw_vias(sv, routes)
     else:
         _draw_components(sv, layout, faded=True)
         _draw_segments(sv, routes, "trace_top", 0.24, 0.12, dashed=True)
         _draw_segments(sv, routes, "jumper", 0.20, 0.10, dashed=True)
         _draw_segments(sv, routes, "trace", 0.95, 0.20)
+        if plano:
+            _draw_juntas(sv, plano, "solda")
         _draw_vias(sv, routes, faded=True)
 
     _draw_pins(sv, layout, hole_nets, orphans)

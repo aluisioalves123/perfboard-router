@@ -197,6 +197,7 @@ function boardSpec() {
     cols: +$('#cols').value,
     rows: +$('#rows').value,
     margin_holes: +$('#margin').value,
+    label_origin: $('#labelOrigin').value,
   };
 }
 
@@ -241,12 +242,34 @@ function payload(autoPlace, keepExisting) {
 
 function updateFacesHint() {
   const duas = $('#faces').value === '2';
+  avisaCombinacao();
   $('#facesHint').innerHTML = duas
     ? `Cada furo tem duas ilhas independentes, sem metalização ligando uma na outra. Dá para
        fazer <b>trilha no lado dos componentes</b> e <b>via</b> (fio no furo, soldado dos dois
        lados). É assim que duas redes se cruzam sem encostar — normalmente dispensa jumper.`
     : `Cobre só de um lado. Solda pelo lado de cima escorre e encosta na ilha de baixo, então o
        lado dos componentes só aceita <b>jumper</b>: fio isolado que pousa só nas pontas.`;
+}
+
+// Duas faces sem trilha em cima e sem jumper nao deixa NADA cruzar: as redes ficam
+// presas numa camada so. Melhor dizer isso antes de a pessoa esperar a busca inteira
+// para receber pino solto.
+function avisaCombinacao() {
+  const el = $('#facesHint');
+  if (!el) return;
+  const duas = $('#faces').value === '2';
+  const jump = $('#allowJumpers').checked;
+  const antigo = el.dataset.base || el.innerHTML;
+  el.dataset.base = antigo;
+  // Com DUAS faces sobra a trilha de cima para cruzar. Quem fica sem saida e uma
+  // face sem jumper: ali a fiacao inteira tem de caber num plano so.
+  if (!duas && !jump) {
+    el.innerHTML = antigo + `<br><br><b class="aviso">Assim nada consegue se cruzar:</b>
+      numa face só e sem jumper, toda a fiação precisa caber num plano. Circuito com
+      CI quase nunca é planar — troque para <b>2 faces</b> ou libere o <b>jumper</b>.`;
+  } else {
+    el.innerHTML = antigo;
+  }
 }
 
 function updateBoardMm() {
@@ -260,6 +283,7 @@ function currentSettings() {
   return {
     cols: +$('#cols').value, rows: +$('#rows').value, margin: +$('#margin').value,
     scale: +$('#scale').value, labelStyle: $('#labelStyle').value,
+    labelOrigin: $('#labelOrigin').value,
     effort: ESFORCO, seed: S.seed,
     edgePull: $('#edgePull').checked,
     modoBusca: $('#modoBusca').value,
@@ -279,7 +303,7 @@ function applySettings(cfg) {
     if (typeof cfg[k] === 'number') $('#' + id).value = cfg[k];
   }
   if (cfg.maxJumpers !== undefined) $('#maxJumpers').value = cfg.maxJumpers;
-  const sel = { labelStyle: 'labelStyle', faces: 'faces',
+  const sel = { labelStyle: 'labelStyle', labelOrigin: 'labelOrigin', faces: 'faces',
                 preset: 'preset', modoBusca: 'modoBusca' };
   for (const [k, id] of Object.entries(sel)) {
     if (cfg[k] !== undefined) $('#' + id).value = String(cfg[k]);
@@ -799,28 +823,58 @@ function montaPar(cap, ic) {
            cap_pin_gnd: gnd.pin, ic_pin_gnd: icGnd, net_gnd: gnd.net };
 }
 
+// O guia lista o que se FAZ, na ordem em que se faz, e no vocabulário de quem está
+// com o ferro na mão. Uma quina do desenho não é um fio dobrado - dobrar fio fino
+// no lugar certo é briga perdida. São dois fios retos e estanho no furo entre eles.
 function renderBuild() {
   const b = S.result.build;
   const t = b.totals;
+  const bc = b.bancada || { fios: [], pontes: [], juntas: [], avisos: [], totais: {} };
+  const bt = bc.totais || {};
   const dot = (n) => `<span class="netdot" style="background:${netColor(n)}"></span>`;
-  const tops = (b.top_bridges || []).map((x) =>
-    `<li>${dot(x.net)}<b>${x.net}</b>: ${x.from_label} → ${x.to_label} — ${x.holes} furos, ${x.length_mm} mm</li>`).join('');
+  const face = (x) => (x.face === 'componentes' ? ' <em>(lado dos componentes)</em>' : '');
+
+  const fios = bc.fios.map((x) =>
+    `<li>${dot(x.net)}<b>${x.net}</b>: fio de <b>${x.mm} mm</b> (${x.furos} furos)
+     de ${x.de_label} a ${x.ate_label}${face(x)}</li>`).join('');
+  const pontes = bc.pontes.map((x) =>
+    `<li>${dot(x.net)}<b>${x.net}</b>: ${x.de_label} + ${x.ate_label}${face(x)}</li>`).join('');
+  const juntas = bc.juntas.map((x) =>
+    `<li>${dot(x.net)}<b>${x.net}</b>: junta em <b>${x.furo_label}</b> —
+     <span class="forma">${x.formato}</span>, alcançando ${x.toca_labels.join(' e ')}${face(x)}</li>`).join('');
   const vias = (b.vias || []).map((x) =>
     `<li>${dot(x.net)}<b>${x.net}</b>: furo ${x.from_label}</li>`).join('');
-  const bridges = b.bridges.map((x) =>
-    `<li>${dot(x.net)}<b>${x.net}</b>: ${x.from_label} → ${x.to_label} — ${x.holes} furos, ${x.length_mm} mm</li>`).join('');
   const jumpers = b.jumpers.map((x) =>
     `<li>${dot(x.net)}<b>${x.net}</b>: ${x.from_label} → ${x.to_label} — corte ${x.cut_mm} mm</li>`).join('');
+
+  const formas = ['linha', 'L', 'T', 'cruz']
+    .filter((k) => bt[k]).map((k) => `${bt[k]} em ${k}`).join(', ');
+  const alerta = (bc.avisos || []).length
+    ? `<div class="msg err"><b>Junta impossível:</b> ${bc.avisos.join('; ')}</div>` : '';
+
   $('#build').innerHTML = `
-    <div class="msg warn">${t.bridges} trilhas no lado da solda · ${t.jumpers} jumpers ·
-      ${t.wire_cut_mm} mm de fio isolado a cortar</div>
-    <h3>Vias — fio atravessando o furo, soldado nas duas faces</h3>
+    ${alerta}
+    <div class="msg warn">${bt.fios || 0} fios retos (${bt.fio_mm || 0} mm) ·
+      ${bt.pontes || 0} pontes de solda · ${bt.juntas || 0} juntas ·
+      ${t.jumpers} jumpers (${t.wire_cut_mm} mm a cortar)</div>
+
+    <h3>1. Pontes de solda — furos vizinhos, sem fio nenhum</h3>
+    <p class="hint">Encosta o estanho de um no outro. É o passo mais barato: faça todos primeiro.</p>
+    <ol>${pontes || '<li>nenhuma</li>'}</ol>
+
+    <h3>2. Fios retos — cortados no tamanho, soldados nas duas pontas</h3>
+    <p class="hint">Todos retos, de propósito: nenhum precisa ser dobrado.</p>
+    <ol>${fios || '<li>nenhum</li>'}</ol>
+
+    <h3>3. Juntas — onde os fios se encontram${formas ? ` <small>(${formas})</small>` : ''}</h3>
+    <p class="hint">Aqui é só estanho, ligando o furo do meio aos vizinhos indicados.
+      Nenhuma junta passa de uma cruz — o alcance do estanho.</p>
+    <ol>${juntas || '<li>nenhuma</li>'}</ol>
+
+    <h3>4. Vias — fio atravessando o furo, soldado nas duas faces</h3>
     <ol>${vias || '<li>nenhuma</li>'}</ol>
-    <h3>Trilhas (lado da solda)</h3>
-    <ol>${bridges || '<li>nenhuma</li>'}</ol>
-    <h3>Trilhas (lado dos componentes)</h3>
-    <ol>${tops || '<li>nenhuma</li>'}</ol>
-    <h3>Jumpers — fio isolado sobrevoando</h3>
+
+    <h3>5. Jumpers — fio isolado sobrevoando</h3>
     <ol>${jumpers || '<li>nenhum</li>'}</ol>`;
 }
 
@@ -1180,6 +1234,7 @@ function bind() {
   ['#cols', '#rows', '#margin'].forEach((s) => $(s).addEventListener('input', updateBoardMm));
   $('#scale').addEventListener('change', () => run(false, true));
   $('#labelStyle').addEventListener('change', () => run(false, true));
+  $('#labelOrigin').addEventListener('change', () => run(false, true));
   $('#faces').addEventListener('change', updateFacesHint);
 
 
@@ -1220,6 +1275,11 @@ function bind() {
       descartaSessao();
       status('sessão guardada descartada — recarregar agora começa do zero', 'ok');
     }
+  });
+
+  ['#allowJumpers'].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener('change', avisaCombinacao);
   });
 
   $('#overlayParar').addEventListener('click', () => {

@@ -76,7 +76,8 @@ def _random_position(spec, fp, rot, rng):
 class _State:
     """Estado do recozimento com custo incremental."""
 
-    def __init__(self, layout: Layout, netlist, edge_pull: float = 0.6, decoupling=None):
+    def __init__(self, layout: Layout, netlist, edge_pull: float = 0.6, decoupling=None,
+                 pesos_de_rede=None):
         self.layout = layout
         self.spec = layout.spec
         self.edge_pull = edge_pull
@@ -94,6 +95,9 @@ class _State:
 
         # redes relevantes e indice reverso
         self.nets = []          # (nome, [(ref, pino), ...])
+        # Peso por rede, herdado das tentativas anteriores: rede que voltou com
+        # pino solto pesa mais e o posicionador aperta ela primeiro.
+        self.pesos_de_rede = pesos_de_rede or {}
         self.ref_nets = {r: set() for r in self.refs}
         for net in netlist.routable_nets():
             nodes = [(ref, pin) for ref, pin in net.nodes if ref in self.ref_nets]
@@ -291,7 +295,7 @@ class _State:
         return W_DESACOPLA * max(0, d - FOLGA_DESACOPLA)
 
     def _calc_net(self, idx):
-        _, nodes = self.nets[idx]
+        nome, nodes = self.nets[idx]
         xs, ys = [], []
         for key in nodes:
             cell = self.pin_cell.get(key)
@@ -300,7 +304,11 @@ class _State:
                 ys.append(cell[1])
         if len(xs) < 2:
             return 0.0
-        return float((max(xs) - min(xs)) + (max(ys) - min(ys)))
+        # O peso vem das tentativas anteriores: rede que voltou com pino solto pesa
+        # mais, e o posicionador aperta ela primeiro. Rede que fecha sozinha vale 1
+        # e nao muda de comportamento.
+        peso = self.pesos_de_rede.get(nome, 1.0)
+        return peso * float((max(xs) - min(xs)) + (max(ys) - min(ys)))
 
     def apply(self, ref, col, row, rot):
         pl = self.layout.placements[ref]
@@ -395,7 +403,7 @@ def initial_pack(layout: Layout, netlist, rng: random.Random):
 
 def auto_place(layout: Layout, netlist, *, seed: int = 1, effort: str = "normal",
                keep_existing: bool = False, edge_pull: float = 0.6,
-               decoupling=None) -> dict:
+               decoupling=None, pesos_de_rede=None) -> dict:
     """Posiciona os componentes nao travados. Altera `layout` no lugar."""
     rng = random.Random(seed)
 
@@ -405,7 +413,8 @@ def auto_place(layout: Layout, netlist, *, seed: int = 1, effort: str = "normal"
     if not keep_existing:
         initial_pack(layout, netlist, rng)
 
-    st = _State(layout, netlist, edge_pull=edge_pull, decoupling=decoupling)
+    st = _State(layout, netlist, edge_pull=edge_pull, decoupling=decoupling,
+                pesos_de_rede=pesos_de_rede)
     if not st.movable:
         return {"moved": 0, "steps": 0, "cost": round(st.cost, 1),
                 "note": "nenhum componente livre para mover"}
@@ -424,7 +433,8 @@ def auto_place(layout: Layout, netlist, *, seed: int = 1, effort: str = "normal"
             "sem_saida": (W_SEM_SAIDA[0], W_SEM_SAIDA[1], W_SEM_SAIDA[2]),
         }
         if nativo.posiciona(st, steps, seed, pesos):
-            final = _State(layout, netlist, edge_pull=edge_pull, decoupling=decoupling)
+            final = _State(layout, netlist, edge_pull=edge_pull, decoupling=decoupling,
+                pesos_de_rede=pesos_de_rede)
             return {
                 "moved": len(st.movable), "steps": steps, "motor": "C",
                 "cost": round(final.cost, 1), "wire_estimate": round(final.wire, 1),

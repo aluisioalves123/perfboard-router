@@ -40,6 +40,24 @@
         <label>Margem (furos) <input type="number" id="margin" min="0" max="10" value="0"></label>
         <label>Zoom <input type="number" id="scale" min="12" max="60" value="30"></label>
       </div>
+      <label>Onde fica o furo A1 na sua placa<span class="ajuda" tabindex="0"
+        aria-label="ajuda">?<span class="dica">
+        Olhando pelo <b>lado dos componentes</b>, em que canto está o furo A1 da
+        numeração impressa na sua perfboard?<br><br>
+        Nem toda placa começa no canto superior esquerdo, e quem cola duas costa com
+        costa costuma ficar com a numeração correndo ao contrário. Se o desenho
+        chamar o furo por um nome e a sua placa tiver outro impresso ali, a montagem
+        vira adivinhação.<br><br>
+        Isto muda <b>só o nome</b> do furo — posição, trilhas e desenho continuam
+        exatamente os mesmos.
+      </span></span>
+        <select id="labelOrigin">
+          <option value="TL" selected>canto superior esquerdo</option>
+          <option value="TR">canto superior direito</option>
+          <option value="BL">canto inferior esquerdo</option>
+          <option value="BR">canto inferior direito</option>
+        </select>
+      </label>
       <label>Nomes dos furos
         <select id="labelStyle">
           <option value="letra" selected>linha A,B,C… / coluna 1,2,3… (como vem impresso)</option>

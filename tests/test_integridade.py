@@ -250,6 +250,164 @@ class TestIntegridade(unittest.TestCase):
         self.assertEqual(res["problems"], [])
         self.assert_tudo(res)
 
+    def test_nome_do_furo_segue_a_numeracao_da_placa(self):
+        """A placa de quem monta manda no nome do furo.
+
+        Nem toda perfboard comeca no canto superior esquerdo. Se o guia disser
+        "R6 no furo Q12" e a placa tiver outro nome impresso ali, a montagem vira
+        adivinhacao - foi exatamente o que aconteceu com uma placa de duas metades
+        coladas, onde a numeracao corre ao contrario.
+        """
+        from perfboard.board import BoardSpec, rotulador
+
+        spec = BoardSpec(24, 18)
+        cantos = {}
+        for origem in ("TL", "TR", "BL", "BR"):
+            nome = rotulador(BoardSpec(24, 18, label_origin=origem))
+            cantos[origem] = nome(0, 0)
+        self.assertEqual(cantos["TL"], "A1")
+        self.assertEqual(cantos["TR"], "A24", "coluna deveria contar da direita")
+        self.assertEqual(cantos["BL"], "R1", "linha deveria contar de baixo")
+        self.assertEqual(cantos["BR"], "R24")
+
+        # o furo A1 existe uma vez so, em cada convencao
+        for origem in ("TL", "TR", "BL", "BR"):
+            nome = rotulador(BoardSpec(24, 18, label_origin=origem))
+            todos = [nome(c, r) for c in range(24) for r in range(18)]
+            self.assertEqual(len(set(todos)), len(todos), "nome repetido em %s" % origem)
+            self.assertIn("A1", todos)
+
+    def test_origem_muda_o_nome_mas_nao_o_layout(self):
+        """Trocar o canto e questao de etiqueta: a placa fisica nao pode mudar."""
+        base = self.solve_case()
+        pos = [dict(p) for p in base["layout"]["placements"]]
+        placa = dict(self.analysis["suggested_board"])
+
+        virado = self.solve_case(board=dict(placa, label_origin="TR"),
+                                 placements=pos, auto_place=False)
+        normal = self.solve_case(board=dict(placa, label_origin="TL"),
+                                 placements=pos, auto_place=False)
+
+        def furos(res):
+            return sorted((p["ref"], p["pin"], p["col"], p["row"])
+                          for p in res["layout"]["pins"])
+
+        self.assertEqual(furos(normal), furos(virado), "a geometria nao podia mudar")
+        self.assertEqual(normal["stats"]["total_mm"], virado["stats"]["total_mm"])
+
+        # ja os nomes tem que mudar, senao a opcao nao serve para nada
+        def nomes(res):
+            return [p["label"] for p in sorted(res["layout"]["pins"],
+                                               key=lambda p: (p["ref"], p["pin"]))]
+        self.assertNotEqual(nomes(normal), nomes(virado))
+
+        # e o guia de montagem tem que falar a MESMA lingua do desenho
+        cols = placa["cols"]
+        for res, origem in ((normal, "TL"), (virado, "TR")):
+            por_furo = {(p["col"], p["row"]): p["label"] for p in res["layout"]["pins"]}
+            for peca in res["build"]["components"]:
+                for pino, rotulo in peca["pin_labels"].items():
+                    self.assertIn(rotulo, por_furo.values(),
+                                  "guia de montagem em %s citou furo que o desenho nao tem"
+                                  % origem)
+
+    def _de_cima(self, res):
+        return [s for r in res["routes"] for s in r["segments"] if s.get("layer") == 1]
+
+    def _layout_de_teste(self):
+        from perfboard.board import BoardSpec
+        from perfboard.project import build_layout
+        from perfboard.placer import auto_place
+        from perfboard import footprints as fpmod
+        from perfboard.netlist import parse_netlist
+
+        nl = parse_netlist(self.text)
+        lib = fpmod.build_library(nl, {})
+        spec = BoardSpec.from_json(self.analysis["suggested_board"])
+        lay = build_layout(nl, spec, lib, None)
+        auto_place(lay, nl, seed=3, effort="rapido")
+        return nl, lay
+
+    def test_pino_de_capacitor_e_de_ci_nao_aceita_solda_por_cima(self):
+        """A ceramica fica SOBRE os terminais; o socket do CI, idem.
+
+        Nao e falta de espaco - nenhuma placa maior resolve. Foi o que travou uma
+        montagem de verdade: o capacitor entregue prensado, com a ligacao dele
+        marcada pelo lado de cima, onde nao ha como encostar o ferro.
+        """
+        from perfboard.router import Router, RouterConfig
+
+        nl, lay = self._layout_de_teste()
+        r = Router(lay, nl, RouterConfig.from_json({"faces": 2}))
+
+        for ref, fp in lay.footprints.items():
+            furos = set(lay.pin_holes(ref).values())
+            if getattr(fp, "estorva", True):
+                for furo in furos:
+                    self.assertIn(furo, r.pinos_so_por_baixo,
+                                  "%s deveria ligar so pelo lado da solda" % ref)
+                    self.assertIn(furo, r.under_parts,
+                                  "%s: o furo dele nao pode aceitar trilha em cima" % ref)
+            else:
+                for furo in furos:
+                    self.assertNotIn(furo, r.pinos_so_por_baixo,
+                                     "%s aceita solda por cima e foi bloqueado" % ref)
+
+    def test_resistor_e_transistor_aceitam_solda_por_cima(self):
+        """Sao os que deixam espaco natural e aguentam o calor - e a maioria da placa."""
+        from perfboard.footprints import estorva_solda
+
+        aceitam = [
+            "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",
+            "Diode_THT:D_DO-41_SOD81_P7.62mm_Horizontal",
+            "Package_TO_SOT_THT:TO-92_Inline",
+        ]
+        recusam = [
+            "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P2.50mm",
+            "Capacitor_THT:CP_Radial_D6.3mm_P2.50mm",
+            "Package_DIP:DIP-14_W7.62mm",
+            "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2-5.08_1x02_P5.08mm_Horizontal",
+            "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical",
+        ]
+        for fp in aceitam:
+            self.assertFalse(estorva_solda("X1", fp), fp)
+        for fp in recusam:
+            self.assertTrue(estorva_solda("X1", fp), fp)
+
+    def test_nao_ha_mais_exigencia_de_espaco_livre(self):
+        """A regra geometrica saiu inteira - e nao pode voltar por acidente.
+
+        Ela errou de tres formas antes de cair: proibindo a face de cima, exigindo
+        anel de folga, e contando furos livres. Todas atrapalhavam o resistor, que
+        e justamente a peca que NAO atrapalha.
+        """
+        from perfboard.router import Router, RouterConfig
+
+        nl, lay = self._layout_de_teste()
+        r = Router(lay, nl, RouterConfig.from_json({"faces": 2}))
+        self.assertFalse(hasattr(r, "sem_ferro"),
+                         "voltou a existir mapa de espaco para solda")
+        self.assertFalse(hasattr(r, "_sem_espaco_para_solda"))
+
+    def test_projeto_antigo_com_folga_negativa_ainda_desliga_o_topo(self):
+        """Projeto salvo na versao anterior nao pode mudar de comportamento."""
+        from perfboard.router import RouterConfig
+
+        self.assertFalse(RouterConfig.from_json({"faces": 2, "folga_solda": -1}).usa_topo)
+        self.assertTrue(RouterConfig.from_json({"faces": 2, "folga_solda": 2}).usa_topo)
+        self.assertFalse(RouterConfig.from_json({"faces": 2, "trilha_em_cima": False}).usa_topo)
+        self.assertTrue(RouterConfig.from_json({"faces": 2}).usa_topo)
+
+    def test_sem_face_de_cima_e_sem_jumper_nao_inventa_ligacao(self):
+        """Combinacao sem saida devolve pino solto, nunca ligacao imaginaria."""
+        res = self.solve_case(router={"faces": 2, "allow_jumpers": False,
+                                      "usa_topo": False})
+        self.assertEqual(self._de_cima(res), [])
+        self.assert_tudo(res)
+        if res["stats"]["orphan_pins"]:
+            self.assertFalse(res["ok"])
+            self.assertIn("SEM LIGACAO", res["svg_top"])
+
     def test_face_unica_nao_usa_via_nem_trilha_de_cima(self):
         res = self.solve_case(router={"faces": 1})
         self.assertEqual(res["stats"]["vias"], 0)

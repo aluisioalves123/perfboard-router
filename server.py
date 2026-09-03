@@ -188,6 +188,21 @@ def main():
     url = "http://%s:%d/" % (args.host, args.port)
     print("Perfboard Router rodando em %s" % url)
     print("Ctrl+C para parar.")
+
+    # Abrir os processos de busca leva ~2s. Fazer isso agora, enquanto voce ainda
+    # esta escolhendo o arquivo, tira esse tempo da primeira busca - que e
+    # justamente quando a espera mais incomoda.
+    def aquece():
+        try:
+            from perfboard import paralelo
+            n = paralelo.nucleos_padrao()
+            if n > 1:
+                paralelo._pool_de(n)
+                print("busca paralela pronta: %d processos" % n)
+        except Exception as exc:      # sem paralelismo o programa funciona igual
+            print("busca paralela indisponivel (%s); seguindo em um processo" % exc)
+
+    threading.Thread(target=aquece, daemon=True).start()
     if not args.no_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

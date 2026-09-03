@@ -28,6 +28,9 @@ class BoardSpec:
     rows: int
     pitch_mm: float = PITCH_MM
     margin_holes: int = 0   # furos de borda reservados (parafusos, corte)
+    # Em que canto da SUA placa fica o furo A1, olhando pelo lado dos componentes.
+    # Muda so o nome do furo, nunca a geometria.
+    label_origin: str = "TL"
 
     @property
     def width_mm(self):
@@ -68,6 +71,7 @@ class BoardSpec:
             "rows": self.rows,
             "pitch_mm": self.pitch_mm,
             "margin_holes": self.margin_holes,
+            "label_origin": self.label_origin,
             "width_mm": round(self.width_mm, 2),
             "height_mm": round(self.height_mm, 2),
         }
@@ -79,6 +83,7 @@ class BoardSpec:
             rows=int(d.get("rows", 18)),
             pitch_mm=float(d.get("pitch_mm", PITCH_MM)),
             margin_holes=int(d.get("margin_holes", 0)),
+            label_origin=str(d.get("label_origin", "TL")).upper()[:2] or "TL",
         )
 
 
@@ -245,8 +250,48 @@ def row_letter(row: int) -> str:
     return s
 
 
-def hole_label(col: int, row: int, style: str = "letra") -> str:
-    """Nome do furo. 'letra' -> A1/R24 (linha em letra, coluna em numero); 'numerica' -> (col,row)."""
+# Cantos onde o furo A1 pode estar, olhando pelo lado dos componentes.
+# T/B = topo ou base; L/R = esquerda ou direita.
+ORIGENS = ("TL", "TR", "BL", "BR")
+
+
+def numeracao(col: int, row: int, cols: int, rows: int, origem: str = "TL"):
+    """(indice de coluna, indice de linha) como estao IMPRESSOS na placa.
+
+    O programa trabalha sempre com a origem no canto superior esquerdo; esta funcao
+    traduz para a numeracao da placa de quem vai montar.
+    """
+    origem = (origem or "TL").upper()
+    if origem not in ORIGENS:
+        origem = "TL"
+    c = col if origem[1] == "L" else (cols - 1 - col)
+    r = row if origem[0] == "T" else (rows - 1 - row)
+    return c, r
+
+
+def hole_label(col: int, row: int, style: str = "letra",
+               origem: str = "TL", cols: int = 0, rows: int = 0) -> str:
+    """Nome do furo. 'letra' -> A1/R24 (linha em letra, coluna em numero); 'numerica' -> (col,row).
+
+    `origem` diz em que canto da placa fica o A1. Sem ela, vale o canto superior
+    esquerdo, que e o caso comum.
+    """
+    c, r = numeracao(col, row, cols or (col + 1), rows or (row + 1), origem)
     if style == "letra":
-        return "%s%d" % (row_letter(row), col + 1)
-    return "(%d,%d)" % (col, row)
+        return "%s%d" % (row_letter(r), c + 1)
+    return "(%d,%d)" % (c, r)
+
+
+def rotulador(spec, style: str = "letra"):
+    """Devolve a funcao que nomeia furo nesta placa, ja com a origem dela.
+
+    Existe para nao espalhar `cols`, `rows` e `origem` por dezenas de chamadas -
+    e para que esquecer um argumento nao gere silenciosamente um nome errado.
+    """
+    origem = getattr(spec, "label_origin", "TL")
+    cols, rows = spec.cols, spec.rows
+
+    def nome(col: int, row: int) -> str:
+        return hole_label(col, row, style, origem, cols, rows)
+
+    return nome

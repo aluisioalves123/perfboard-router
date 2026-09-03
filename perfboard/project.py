@@ -4,10 +4,11 @@ from __future__ import annotations
 import math
 import time
 
+from . import bancada
 from . import footprints as fpmod
 from . import paralelo
 from . import render
-from .board import BoardSpec, Layout, Placement, PITCH_MM, hole_label
+from .board import BoardSpec, Layout, Placement, PITCH_MM, rotulador
 from .netlist import parse_netlist
 from .placer import auto_place
 from .router import Router, RouterConfig
@@ -253,6 +254,11 @@ def build_layout(nl, spec: BoardSpec, lib: dict, placements_json=None) -> Layout
 
 PASSO_MM = 2.54          # distancia entre furos de uma perfboard de 0,1"
 
+# Quanto o peso de uma rede sobe a cada tentativa em que ela nao fecha, e ate onde.
+# O teto existe para a busca nao virar obsessao por uma rede so, esquecendo o resto.
+PASSO_PESO_REDE = 0.4
+TETO_PESO_REDE = 6.0
+
 
 def esforco_de_bancada(st, cfg) -> float:
     """Quanto trabalho manual esta solucao custa, num numero so.
@@ -346,6 +352,10 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
     t_zero = time.time()
     # quantos pinos o circuito tem ao todo: e a base do "% ja ligado" no grafico
     total_pinos = max(1, nl.summary()["pins"])
+    # Rede que volta com pino solto ganha peso; o posicionador aperta ela na
+    # tentativa seguinte. Sem isto, cada sorteio recomeca ignorando tudo o que os
+    # anteriores descobriram - e o mesmo emaranhado se repete.
+    pesos_de_rede = {}
     esforco_base = None      # esforco da PRIMEIRA solucao completa; a economia parte dela
     primeira_esforco = None  # e como ela era, para a tela mostrar o antes x depois
     i = -1
@@ -373,6 +383,7 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
                     keep_existing=bool(pcfg.get("keep_existing", False)),
                     edge_pull=float(pcfg.get("edge_pull", 0.6)),
                     decoupling=pares,
+                    pesos_de_rede=dict(pesos_de_rede),
                 )
             r = Router(lay, nl, rcfg)
 
@@ -416,6 +427,16 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
 
             cand_result = cand["resultado"]
             problemas = cand["problemas"]
+
+            # Aprende com esta tentativa: rede que nao fechou fica mais cara de
+            # espalhar na proxima. Teto para nao virar obsessao por uma rede so.
+            for rota in cand_result["routes"]:
+                if rota.get("orphans") or not rota.get("ok", True):
+                    atual = pesos_de_rede.get(rota["name"], 1.0)
+                    pesos_de_rede[rota["name"]] = min(TETO_PESO_REDE,
+                                                      atual + PASSO_PESO_REDE)
+            if bando is not None:
+                bando.pesos(pesos_de_rede)
             st = cand_result["stats"]
             soltos_aqui = len(st.get("orphan_pins", []))
             esforco = esforco_de_bancada(st, rcfg)
@@ -526,11 +547,18 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
 
     scale = float(payload.get("scale", 26))
     style = payload.get("label_style", "letra")
+    # Um rotulador so para toda a resposta: o nome do furo tem que sair igual no
+    # desenho, na verificacao e no guia de montagem - senao a pessoa procura na
+    # placa um furo que o texto chama de outro jeito.
+    nome_do_furo = rotulador(spec, style)
     hole_nets = result["occupancy"]["holes"]
+    # Um plano so, usado pelo desenho E pelo guia: assim nao ha como um dizer 13
+    # juntas e o outro 14.
+    plano_bancada = bancada.plano_de_montagem(result["routes"], nome_do_furo)
     svg_top = render.render_board(layout, result["routes"], "top", scale, hole_nets,
-                                  label_style=style)
+                                  label_style=style, plano=plano_bancada)
     svg_bottom = render.render_board(layout, result["routes"], "bottom", scale, hole_nets,
-                                     label_style=style)
+                                     label_style=style, plano=plano_bancada)
 
     fp_warnings = ["%s: %s" % (ref, w) for ref in sorted(lib) for w in lib[ref].warnings]
 
@@ -549,14 +577,20 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
 
         # 1) duas faces resolveria? (so faz sentido perguntar se ele esta em face unica)
         if not rcfg.two_sided:
-            alt = tentar(faces=2, allow_jumpers=False)
+            # A segunda face so ajuda se a trilha do lado dos componentes for
+            # permitida - e ela e o que o usuario normalmente NAO quer, porque corre
+            # entre os corpos das pecas. Entao a sugestao precisa dizer isso junto,
+            # senao manda trocar de placa para nada.
+            alt = tentar(faces=2, allow_jumpers=False, trilha_em_cima=True)
             if not alt["stats"]["orphan_pins"]:
                 suggestion = {
                     "kind": "duas_faces",
                     "vias": alt["stats"]["vias"],
-                    "message": ("%d pino(s) ficam soltos nesta placa de face unica. Trocando o tipo "
-                                "de placa para PERFBOARD DE 2 FACES o circuito fecha "
-                                "100%%, com %d via(s) e nenhum jumper."
+                    "message": ("%d pino(s) ficam soltos nesta placa de face unica. Com "
+                                "PERFBOARD DE 2 FACES e trilha no lado dos componentes "
+                                "liberada, o circuito fecha 100%%, com %d via(s) e nenhum "
+                                "jumper. Repare que essa trilha corre entre os corpos das "
+                                "pecas: so vale se voce conseguir soldar ali."
                                 % (soltos, alt["stats"]["vias"])),
                 }
 
@@ -581,10 +615,10 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
             }
 
     for o in result["stats"].get("orphan_pins", []):
-        o["label"] = hole_label(o["cell"][0], o["cell"][1], style)
+        o["label"] = nome_do_furo(o["cell"][0], o["cell"][1])
     for route in result["routes"]:
         for o in route.get("orphans", []):
-            o["label"] = hole_label(o["cell"][0], o["cell"][1], style)
+            o["label"] = nome_do_furo(o["cell"][0], o["cell"][1])
 
     # quao perto os capacitores de desacoplamento realmente ficaram
     relatorio_desacopla = []
@@ -598,8 +632,8 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
                 furos = abs(ca[0] - cb[0]) + abs(ca[1] - cb[1])
                 item[rotulo + "_furos"] = furos
                 item[rotulo + "_mm"] = round(furos * PITCH_MM, 1)
-                item[rotulo + "_de"] = hole_label(ca[0], ca[1], style)
-                item[rotulo + "_ate"] = hole_label(cb[0], cb[1], style)
+                item[rotulo + "_de"] = nome_do_furo(ca[0], ca[1])
+                item[rotulo + "_ate"] = nome_do_furo(cb[0], cb[1])
         # O que importa e a AREA DO LACO: alimentacao -> capacitor -> terra -> CI.
         # Ele tem um piso fisico: se os pinos de alimentacao e terra do CI estao
         # longe um do outro (num DIP-16 o VCC e o GND ficam em cantos opostos, 10
@@ -634,7 +668,7 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
     layout_json = layout.to_json()
     for pin in layout_json["pins"]:
         pin["net"] = router._net_name(pin["ref"], pin["pin"]) or ""
-        pin["label"] = hole_label(pin["col"], pin["row"], style)
+        pin["label"] = nome_do_furo(pin["col"], pin["row"])
 
     return {
         "ok": result["stats"]["nets_failed"] == 0 and not result["shorts"] and not layout.problems(),
@@ -655,12 +689,14 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
         "jumper_limit": relato_jumpers,
         "historico": historico,
         "suggestion": suggestion,
-        "build": build_instructions(layout, result, style),
+        "build": build_instructions(layout, result, style, plano_bancada),
     }
 
 
-def build_instructions(layout: Layout, result: dict, style: str = "letra") -> dict:
-    """Roteiro de montagem: onde por cada peca, que pontes e que jumpers fazer."""
+def build_instructions(layout: Layout, result: dict, style: str = "letra",
+                       plano=None) -> dict:
+    """Roteiro de montagem: onde por cada peca, que fios, pontes e juntas fazer."""
+    nome_do_furo = rotulador(layout.spec, style)
     comps = []
     for ref in sorted(layout.placements):
         fp = layout.footprints.get(ref)
@@ -671,11 +707,11 @@ def build_instructions(layout: Layout, result: dict, style: str = "letra") -> di
         comps.append({
             "ref": ref,
             "origin": [pl.col, pl.row],
-            "origin_label": hole_label(pl.col, pl.row, style),
+            "origin_label": nome_do_furo(pl.col, pl.row),
             "rot": pl.rot,
             "pattern": fp.label,
             "pins": {p: list(c) for p, c in sorted(pins.items())},
-            "pin_labels": {p: hole_label(c[0], c[1], style) for p, c in sorted(pins.items())},
+            "pin_labels": {p: nome_do_furo(c[0], c[1]) for p, c in sorted(pins.items())},
         })
 
     bridges, top_bridges, jumpers, vias = [], [], [], []
@@ -685,8 +721,8 @@ def build_instructions(layout: Layout, result: dict, style: str = "letra") -> di
                 "net": r["name"],
                 "from": seg["from"],
                 "to": seg["to"],
-                "from_label": hole_label(seg["from"][0], seg["from"][1], style),
-                "to_label": hole_label(seg["to"][0], seg["to"][1], style),
+                "from_label": nome_do_furo(seg["from"][0], seg["from"][1]),
+                "to_label": nome_do_furo(seg["to"][0], seg["to"][1]),
                 "length_mm": seg["length_mm"],
                 "face": seg.get("face", ""),
                 "holes": int(round(max(abs(seg["to"][0] - seg["from"][0]),
@@ -708,8 +744,16 @@ def build_instructions(layout: Layout, result: dict, style: str = "letra") -> di
     vias.sort(key=lambda b: (b["net"], b["from"]))
     jumpers.sort(key=lambda b: (-b["length_mm"], b["net"]))
 
+    # O mesmo roteamento contado como se monta: fio reto, ponte de solda entre
+    # vizinhos e junta nas quinas. Quem le com o ferro na mao precisa disto, nao
+    # da lista de passos do roteador. Vem pronto de quem desenhou, para desenho e
+    # texto contarem a mesma historia.
+    if plano is None:
+        plano = bancada.plano_de_montagem(result["routes"], nome_do_furo)
+
     return {
         "components": comps,
+        "bancada": plano,
         "bridges": bridges,
         "top_bridges": top_bridges,
         "vias": vias,

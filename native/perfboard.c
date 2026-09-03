@@ -43,6 +43,13 @@
 static const int DC[PB_DIRS] = {1, -1, 0, 0};
 static const int DR[PB_DIRS] = {0, 0, 1, -1};
 
+/* Versao da INTERFACE do A* (nao do algoritmo). Suba este numero sempre que mudar
+   a ordem ou o tipo dos argumentos de `pb_astar`, ou os campos de PbConfig.
+   O Python confere antes de chamar: binario velho com ponte nova nao e erro, e
+   comportamento indefinido - ja custou uma tarde caçando um bug que nao existia,
+   com o programa devolvendo numeros ruins mas plausiveis. */
+#define PB_ASTAR_ABI 3
+
 typedef struct {
     int cols, rows, faces;
     double trace_cost, top_trace_cost, turn_cost, via_cost;
@@ -50,7 +57,12 @@ typedef struct {
     int max_jumper, allow_jumpers;
     double pres_weight, pres;
     int soft;
+    /* Trilha no lado dos COMPONENTES. Desligada, a face de cima so recebe jumper:
+       trilha ali corre entre os corpos das pecas, onde o ferro nao alcanca. */
+    int trilha_em_cima;
 } PbConfig;
+
+PB_EXPORT int pb_astar_abi(void) { return PB_ASTAR_ABI; }
 
 /* ---------------------------------------------------------------- heap binario */
 
@@ -167,7 +179,7 @@ typedef struct {
     const int *edge_outras;           /* N*2*2: idem para arestas (eixo 0=dir, 1=baixo) */
     const float *hist_pad;            /* N*2 */
     const float *hist_edge;           /* N*2*2 */
-    const unsigned char *sob_peca;    /* N: furo coberto por corpo de componente */
+    const unsigned char *sob_peca;    /* N: corpo de peca - o fio de cima nao passa */
     const unsigned char *tem_pino;    /* N: furo ocupado por terminal */
     const unsigned char *eh_alvo;     /* N */
     const int *alvos;
@@ -260,7 +272,8 @@ PB_EXPORT int pb_astar(const PbConfig *cfg,
 
     /* passo mais barato por furo, para a heuristica continuar admissivel */
     double passo_min = cfg->trace_cost;
-    if (cfg->faces >= 2 && cfg->top_trace_cost < passo_min) passo_min = cfg->top_trace_cost;
+    if (cfg->faces >= 2 && cfg->trilha_em_cima && cfg->top_trace_cost < passo_min)
+        passo_min = cfg->top_trace_cost;
     if (cfg->allow_jumpers && cfg->jumper_per_hole < passo_min) passo_min = cfg->jumper_per_hole;
     if (passo_min < 0.01) passo_min = 0.01;
 
@@ -307,8 +320,9 @@ PB_EXPORT int pb_astar(const PbConfig *cfg,
         int c = cell % cols, r = cell / cols;
         double gcur = g[st];
 
-        /* 1) trilha, furo a furo na mesma face */
-        if (face == 0 || cfg->faces >= 2) {
+        /* 1) trilha, furo a furo na mesma face.
+           No lado dos componentes so anda fio se `trilha_em_cima` permitir. */
+        if (face == 0 || (cfg->faces >= 2 && cfg->trilha_em_cima)) {
             double passo = (face == 0) ? cfg->trace_cost : cfg->top_trace_cost;
             int kind = (face == 0) ? PB_TRACE : PB_TRACE_TOP;
             for (int d = 0; d < PB_DIRS; d++) {

@@ -36,15 +36,31 @@ from perfboard import nativo  # noqa: E402
 EXEMPLOS = [os.path.join(RAIZ, "examples", n)
             for n in ("astavel_555.net", "registrador_595.net")]
 
+# Modo completo: a comparacao estatistica C x Python com amostra grande. Custa
+# minutos, entao nao roda a cada salvamento - roda antes de publicar.
+COMPLETO = os.environ.get("PERFBOARD_TESTE_COMPLETO") == "1"
+
 # Casos deliberadamente apertados: placa justa, sem jumper, duas faces. E onde a
 # escolha de caminho pesa e onde uma implementacao pior aparece.
-CASOS = [
+#
+# Na suite rapida ficam os dois casos de DUAS FACES sem jumper, com duas sementes.
+# Nao e economia arbitraria: e onde o A* tem mais liberdade de escolha, e foi la
+# que as duas divergencias reais entre os motores apareceram (o desempate do heap
+# incompleto, das duas vezes). Um motor sistematicamente pior nao passa nem com
+# duas sementes; o que a amostra grande acrescenta e medir QUANTO pior, e isso e
+# pergunta de antes de publicar.
+CASOS_COMPLETOS = [
     # (indice do arquivo, colunas, linhas, faces, jumpers, sementes)
     (0, 22, 20, 1, True,  (1, 2, 3)),
     (0, 14, 12, 2, False, (1, 2, 3, 4)),
     (1, 22, 20, 2, False, (1, 2, 3, 4)),
     (1, 20, 18, 1, True,  (1, 2, 3)),
 ]
+CASOS_RAPIDOS = [
+    (0, 14, 12, 2, False, (1,)),
+    (1, 22, 20, 2, False, (1,)),
+]
+CASOS = CASOS_COMPLETOS if COMPLETO else CASOS_RAPIDOS
 
 # Roteia SEMPRE as mesmas posicoes, geradas em Python nas duas execucoes. Assim a
 # unica diferenca entre elas e o motor de ROTEAMENTO.
@@ -111,13 +127,25 @@ class TestRoteadorC(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.com_c = roda_roteador(True)
-        cls.sem_c = roda_roteador(False)
+        # As duas rodadas nao dependem uma da outra: a de Python so serve de
+        # gabarito para a de C. Em serie, dobravam o tempo do teste mais caro da
+        # suite sem motivo nenhum.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            com, sem = ex.submit(roda_roteador, True), ex.submit(roda_roteador, False)
+            cls.com_c, cls.sem_c = com.result(), sem.result()
 
     def test_o_motor_certo_foi_usado(self):
         self.assertTrue(all(c["motor_c"] for c in self.com_c), "o C nao foi carregado")
         self.assertFalse(any(c["motor_c"] for c in self.sem_c), "o C vazou para o run Python")
-        self.assertGreaterEqual(len(self.com_c), 12, "amostra pequena demais")
+        # A amostra existe nos dois modos; o que muda e o tamanho. Este guarda so
+        # impede que ela seja esvaziada por acidente ao mexer nos CASOS.
+        minimo = 12 if COMPLETO else 2
+        self.assertGreaterEqual(len(self.com_c), minimo,
+                                "amostra vazia demais para o modo %s"
+                                % ("completo" if COMPLETO else "rapido"))
+        self.assertEqual(len(self.com_c), len(self.sem_c),
+                         "os dois motores tem que ver exatamente os mesmos casos")
 
     def test_c_nao_fecha_menos_que_o_python(self):
         piores = [
@@ -134,7 +162,12 @@ class TestRoteadorC(unittest.TestCase):
                              % (soma_c, soma_py))
 
     def test_amostra_tem_caso_dificil(self):
-        """Conjunto so de casos faceis passa mesmo com o nucleo quebrado."""
+        """Conjunto so de casos faceis passa mesmo com o nucleo quebrado.
+
+        Vale nos dois modos: o que muda entre eles e o TAMANHO da amostra, nunca a
+        dificuldade dela. Uma suite rapida cheia de caso facil daria a sensacao de
+        cobertura sem cobrir nada.
+        """
         self.assertTrue([c for c in self.sem_c if c["soltos"] > 0],
                         "nenhum caso dificil na amostra - este teste nao pegaria "
                         "uma regressao de qualidade de roteamento")
@@ -151,7 +184,11 @@ class TestPosicionadorC(unittest.TestCase):
     # Amostra grande de proposito: com 5 sementes a variancia entre duas heuristicas
     # chega a 23%, e o teste acusava regressao que nao existia. Com 20 a diferenca
     # real aparece - medida em 3% de media, 2% de mediana.
-    SEMENTES = tuple(range(1, 21))
+    # 20 sementes no modo completo. A tolerancia agregada de 12% so tem sentido com
+    # amostra grande - com poucas, a variancia entre duas heuristicas passa de 20%
+    # e o teste acusaria regressao inexistente. Na suite rapida ficam 6 sementes e
+    # so as invariantes, que sao deterministicas e valem para qualquer amostra.
+    SEMENTES = tuple(range(1, 21)) if COMPLETO else tuple(range(1, 7))
 
     @classmethod
     def setUpClass(cls):
@@ -229,7 +266,16 @@ class TestPosicionadorC(unittest.TestCase):
                         "nenhuma peca ficou em 90 ou 270 graus em %d sementes - "
                         "sinal de orientacao colapsada" % len(self.com_c))
 
+    @unittest.skipUnless(COMPLETO, "amostra pequena demais; use PERFBOARD_TESTE_COMPLETO=1")
     def test_qualidade_agregada_comparavel(self):
+        """Comparar duas heuristicas exige amostra grande.
+
+        Com poucas sementes a variancia entre elas passa de 20% e este teste
+        acusaria regressao que nao existe - ja aconteceu. As invariantes acima
+        (nada sobreposto, nada fora da placa, travada imovel, as quatro rotacoes)
+        sao deterministicas e rodam sempre; a MEDIDA de quanto um motor e melhor
+        que o outro fica para o modo completo.
+        """
         media_c = sum(r["custo"] for r in self.com_c) / len(self.com_c)
         media_py = sum(r["custo"] for r in self.sem_c) / len(self.sem_c)
         # 12% e folga confortavel sobre os 3% medidos, e ainda pega degradacao real

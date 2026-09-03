@@ -35,6 +35,9 @@ class FootprintDef:
     margins: tuple = (0, 0, 0, 0)
     body_note: str = ""                       # de onde veio a medida, para a interface
     pin_note: str = ""                        # idem, para o afastamento dos terminais
+    # Atrapalha soldar num furo vizinho, pelo lado de cima? Resistor nao; capacitor,
+    # conector e CI (que vai em socket) sim.
+    estorva: bool = True
 
     @property
     def extent(self):
@@ -76,6 +79,7 @@ class FootprintDef:
                         round(self.body_size[1] * PITCH_MM, 1)],
             "body_note": self.body_note,
             "pin_note": self.pin_note,
+            "estorva_solda": self.estorva,
             "arranjo": arranjo_dos_pinos(self.pins),
         }
 
@@ -100,6 +104,29 @@ FOLGA_DOBRA_MM = 1.9
 # placa. Peca radial (disco, eletrolitico, LED) ja tem os terminais para baixo e
 # nao entra nesta conta - alargar o passo dela so afastaria os furos a toa.
 AXIAIS = ("R_Axial", "C_Axial", "L_Axial", "D_DO", "D_A-405", "Varistor")
+
+# Pecas que NAO atrapalham soldar por cima, nem no furo delas nem ao lado. Duas
+# familias, e a razao de cada uma e diferente:
+#
+# * axial deitada (resistor, diodo, indutor): o corpo fica ENTRE os terminais, e
+#   nao sobre eles - o furo continua acessivel. Baixa e aguenta calor.
+# * TO-92: pequeno e com as pernas abertas; da para encostar o ferro no furo.
+#
+# Capacitor fica de fora de proposito: a ceramica fica SOBRE os terminais, e nao ha
+# placa grande o bastante que resolva. CI, mais ainda - vai em socket, e sobre o
+# socket nao se solda nada.
+NAO_ESTORVAM_SOLDA = ("R_Axial", "R_Box", "R_Bare", "L_Axial", "D_DO", "D_A-405",
+                      "TO-92", "TO92", "TO-226", "TO-18")
+
+
+def estorva_solda(ref: str, footprint: str) -> bool:
+    """Esta peca atrapalha encostar o ferro num furo vizinho?"""
+    nome = footprint or ""
+    if any(k in nome for k in NAO_ESTORVAM_SOLDA):
+        return False
+    if not nome and ref[:1].upper() == "R" and not ref[:2].upper().startswith("RV"):
+        return True     # sem footprint nao da para afirmar que e axial
+    return True
 
 
 def _passo_axial(name: str, passo_nominal: int):
@@ -486,5 +513,6 @@ def build_library(netlist, overrides=None) -> dict:
     lib = {}
     for ref, comp in netlist.components.items():
         d = infer(comp.footprint, comp.pins, ref)
+        d.estorva = estorva_solda(ref, comp.footprint)
         lib[ref] = aplica_override(d, overrides.get(ref))
     return lib

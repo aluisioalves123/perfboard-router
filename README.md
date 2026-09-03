@@ -166,9 +166,48 @@ Sem furo metalizado ligando os lados, as ilhas de cima e de baixo são eletricam
 É assim que duas redes se cruzam sem encostar: uma passa por baixo, a outra por cima. Na prática
 **dispensa jumper**.
 
-Duas ressalvas físicas: o terminal de um componente ocupa as **duas** faces do furo — e já serve de
-via para a rede dele, de graça. E trilha por cima **não passa por baixo do corpo das peças**: para
-trocar um componente você teria de cortar a fiação, e a solda fica inacessível.
+Duas ressalvas físicas. O terminal de um componente ocupa as **duas** faces do furo — e já serve de
+via para a rede dele, de graça. E trilha por cima **não passa por baixo do corpo das peças**: a peça
+está fisicamente no caminho.
+
+### Nem todo pino aceita solda por cima
+
+A distinção que mais importa na bancada, e a que mais custou para o modelo acertar: depende do
+**tipo da peça**, não do espaço em volta.
+
+| | O corpo fica | Solda por cima do furo |
+|---|---|---|
+| resistor, diodo axial, indutor | **entre** os terminais | sim — o furo continua livre |
+| transistor TO-92 | acima, mas pequeno e com pernas abertas | sim |
+| capacitor | **sobre** os terminais | **não** — a cerâmica cobre o furo |
+| CI | em socket, cobrindo os pinos | **não** |
+| borne, trimpot | corpo alto sobre os furos | **não** |
+
+Para os que não aceitam, não é questão de apertado: **nenhuma placa maior resolve**. Esses ligam-se
+só pelo lado da solda, e o roteador trata isso como restrição dura.
+
+Antes de chegar nisso, o modelo tentou três versões geométricas — proibir a face de cima, exigir um
+anel de folga em volta das peças, contar furos livres em volta de cada solda. Todas erravam do mesmo
+jeito: penalizavam o resistor, que é a maioria da placa e justamente a peça que **não** atrapalha. A
+pergunta certa nunca foi "cabe o ferro aqui?", e sim "o corpo desta peça está em cima do furo dela?".
+
+### Fio reto, ponte de solda e junta
+
+Uma quina **não** é um fio dobrado. Dobrar fio fino no ângulo certo, no lugar certo, é briga perdida
+— o que se faz são dois fios retos e estanho no furo entre eles. Por isso o desenho e o guia falam
+em três coisas, e só três:
+
+| | O que é | Como aparece no desenho |
+|---|---|---|
+| **Ponte de solda** | dois furos vizinhos, **sem fio nenhum** | traço curto e grosso |
+| **Fio reto** | pedaço cortado no tamanho, soldado nas duas pontas | linha fina com bolinha em cada ponta |
+| **Junta** | onde dois trechos se encontram | anel em volta do furo |
+
+O estanho alcança o furo do meio e os vizinhos ortogonais — no máximo uma cruz, na prática quase
+sempre um L. O sistema avisa se alguma junta precisasse de mais que isso.
+
+Desenho e guia leem a **mesma** lista (`perfboard/bancada.py`): não existe a possibilidade de um
+dizer 13 juntas e o outro 14.
 
 ### Quando alguma rede não fecha
 
@@ -237,19 +276,23 @@ solto em silêncio.
 
 ## Medido num circuito real
 
-LM324 + 2 transistores + 14 resistores + 4 bornes + trimpot (26 peças / 18 redes), placa 24×18,
-**2 faces, sem jumper nenhum**, com os 4 bornes e o trimpot travados à mão. 10 processos:
+LM324 + 2 transistores + 15 resistores + 3 capacitores + 4 bornes + trimpot (26 peças / 17 redes
+a rotear), **2 faces, sem jumper nenhum**, com as regras físicas todas ativas — inclusive os 31
+pinos de capacitor, CI, borne e trimpot que só aceitam ligação pelo lado da solda.
 
-| | tentativa | tempo | quinas | vias | jumpers | fio |
-|---|---|---|---|---|---|---|
-| 1ª solução completa | 1 | 4,4 s | 47 | 15 | 0 | 744 mm |
-| melhor ao estacionar | 698 | 94 s | **37** | **6** | 0 | **668 mm** |
+| placa | fecha 100% | fios retos | vias | juntas | achou na tentativa |
+|---|---|---|---|---|---|
+| 24×18 | não (2 soltos) | — | — | — | — |
+| **28×22** | **sim** | **53** | **4** | **38** | **5** |
+| 32×26 | sim | 91 | 31 | 62 | 18 |
 
-A busca parou sozinha na tentativa 2330 (437 s, 102 soluções completas encontradas), sem achar nada
-melhor depois da 698. Continuar depois da primeira valeu **28% menos trabalho de montagem**.
+Repare que a placa maior saiu **pior**: mais espaço deu mais volta, não menos. E que a 24×18 não
+fecha — 26 peças com 15 resistores de 4 furos e um DIP-14 não cabem em 432 furos com folga para
+rotear.
 
-Para comparação, a mesma busca em um processo só levava 309 s para chegar onde o paralelo chega em
-54 s.
+Depois de fechar, continuar procurando vale a pena: numa medição anterior a busca saiu de 47 quinas
+e 15 vias para 37 quinas e 6 vias, **28% menos trabalho de montagem**, e parou sozinha ao estacionar.
+Em um processo só isso levava 309 s; com os núcleos em paralelo, 54 s.
 
 ### Tamanho de placa não resolve falta de camada
 
@@ -318,6 +361,7 @@ perfboard/
     router.py            A* + negociação de congestionamento
     paralelo.py          tentativas em processos paralelos
     nativo.py            ponte ctypes para o núcleo em C
+    bancada.py           traduz o roteamento para fio, ponte de solda e junta
     render.py            desenho SVG dos dois lados
     project.py           orquestração, busca e guia de montagem
   web/                   interface (HTML/CSS/JS puro, sem framework)
@@ -333,7 +377,7 @@ perfboard/
 python -m unittest discover -s tests -v
 ```
 
-51 testes. Eles não checam formato de saída: checam que o resultado é **fisicamente construível** —
+67 testes. Eles não checam formato de saída: checam que o resultado é **fisicamente construível** —
 nenhum furo ou aresta disputado por duas redes, jumper só entre furos da mesma rede e nunca num furo
 que já tem pino, corpos sem sobreposição, e cada rede formando um grafo conexo que contém todos os
 seus pinos.

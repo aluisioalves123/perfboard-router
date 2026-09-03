@@ -25,6 +25,10 @@ LIVRE = 4
 TIPOS = {0: "start", 1: "trace", 2: "trace_top", 3: "jumper", 4: "via", 5: "lead"}
 
 
+# Tem de casar com PB_ASTAR_ABI em native/perfboard.c.
+ABI_ESPERADA = 3
+
+
 class PbPlaceCfg(ctypes.Structure):
     _fields_ = [
         ("w_overlap_final", ctypes.c_double), ("w_overlap_inicial", ctypes.c_double),
@@ -47,6 +51,7 @@ class PbConfig(ctypes.Structure):
         ("max_jumper", ctypes.c_int), ("allow_jumpers", ctypes.c_int),
         ("pres_weight", ctypes.c_double), ("pres", ctypes.c_double),
         ("soft", ctypes.c_int),
+        ("trilha_em_cima", ctypes.c_int),
     ]
 
 
@@ -63,12 +68,22 @@ def _carrega():
             lib.pb_versao.restype = ctypes.c_int
             if lib.pb_versao() != 1:
                 continue
+            # Binario antigo com ponte nova nao da erro: da comportamento
+            # indefinido, e o programa devolve numeros ruins que parecem legitimos.
+            # Entao a interface tem versao, e sem ela combinar seguimos em Python.
+            try:
+                lib.pb_astar_abi.restype = ctypes.c_int
+                if lib.pb_astar_abi() != ABI_ESPERADA:
+                    continue
+            except AttributeError:
+                continue        # .dll de antes da versao: nao da para confiar
             lib.pb_astar.restype = ctypes.c_int
             lib.pb_astar.argtypes = [
                 ctypes.POINTER(PbConfig),
                 ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
                 ctypes.POINTER(ctypes.c_int),
                 ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                # sob_peca, tem_pino, eh_alvo
                 ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_ubyte),
                 ctypes.POINTER(ctypes.c_ubyte),
                 ctypes.POINTER(ctypes.c_int), ctypes.c_int,
@@ -259,6 +274,9 @@ def astar(router, sources, goals, net, res):
         jumper_base=cfg.jumper_base, jumper_per_hole=cfg.jumper_per_hole,
         max_jumper=cfg.max_jumper, allow_jumpers=1 if cfg.allow_jumpers else 0,
         pres_weight=res.pres_weight, pres=res.pres, soft=1 if res.soft else 0,
+        # a folga em si ja veio embutida no mapa `sob_peca`; aqui so dizemos
+        # se a face de cima esta em uso
+        trilha_em_cima=1 if cfg.usa_face_de_cima else 0,
     )
 
     arr_alvos = (ctypes.c_int * len(alvos))(*alvos)

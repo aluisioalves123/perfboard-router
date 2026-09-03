@@ -109,6 +109,11 @@ class RouterConfig:
     faces: int = 1                  # 1 = perfboard comum; 2 = duas faces isoladas
     trace_cost: float = 5.0         # passo de trilha no lado da solda (1 furo)
     top_trace_cost: float = 7.0     # passo de trilha no lado dos componentes
+    # A face dos componentes esta em uso? O que decide onde se pode soldar la em
+    # cima nao e espaco livre - e o TIPO da peca (veja `estorva_solda` em
+    # footprints.py). Resistor e transistor deixam soldar no furo deles; capacitor
+    # e CI nao, porque o corpo fica sobre os terminais.
+    usa_topo: bool = True
     turn_cost: float = 45.0         # dobrar o fio 90 graus
     via_cost: float = 70.0          # trocar de face num furo livre
     jumper_base: float = 110.0      # custo fixo de instalar um jumper
@@ -134,6 +139,21 @@ class RouterConfig:
                 setattr(cfg, k, v)
 
         # numeros explicitos mandam mais que o perfil
+        # `folga_solda` e `trilha_em_cima` sao de versoes anteriores; projetos
+        # salvos ainda os trazem. Valor negativo queria dizer "nao use a face de
+        # cima", e so isso continua valendo.
+        # Os dois campos antigos NAO querem dizer a mesma coisa, e tratar juntos ja
+        # deu errado: em `folga_solda` o negativo e que desligava (0 era "sem
+        # exigencia", ligado); em `trilha_em_cima` o False desliga direto.
+        if "folga_solda" in d:
+            try:
+                cfg.usa_topo = int(d["folga_solda"]) >= 0
+            except (TypeError, ValueError):
+                pass
+        if "trilha_em_cima" in d:
+            cfg.usa_topo = bool(d["trilha_em_cima"])
+        if "usa_topo" in d:
+            cfg.usa_topo = bool(d["usa_topo"])
         for k in ("trace_cost", "top_trace_cost", "turn_cost", "via_cost",
                   "jumper_base", "jumper_per_hole", "history_gain"):
             if k in d:
@@ -145,6 +165,11 @@ class RouterConfig:
             cfg.allow_jumpers = bool(d["allow_jumpers"])
         cfg.faces = 2 if cfg.faces >= 2 else 1
         return cfg
+
+    @property
+    def usa_face_de_cima(self) -> bool:
+        """A face dos componentes aceita trilha nesta configuracao?"""
+        return self.two_sided and self.usa_topo
 
     @property
     def two_sided(self) -> bool:
@@ -355,11 +380,27 @@ class Router:
                     if cell not in self.pin_cells[net]:
                         self.pin_cells[net].append(cell)
 
-        # furos cobertos pelo corpo das pecas: trilha do lado de cima nao passa por ali
-        self.under_parts = set()
+        # O que a face de cima aceita nao e questao de espaco livre - e do TIPO da
+        # peca. O corpo do resistor fica ENTRE os terminais, entao o furo dele
+        # continua soldavel por cima; o do capacitor fica SOBRE os terminais, e o
+        # do CI vai em socket. Nesses, nenhuma placa maior resolve.
+        corpos = set()
+        pinos_soldaveis_por_cima = set()
         for ref in layout.placements:
-            self.under_parts |= layout.body_cells(ref)
-        self.under_parts -= set(self.pin_of_hole)
+            celulas = layout.body_cells(ref)
+            corpos |= celulas
+            fp = layout.footprints.get(ref)
+            if not (fp is None or getattr(fp, "estorva", True)):
+                # O corpo de um resistor fica ENTRE os terminais: os furos dele
+                # seguem acessiveis por cima.
+                pinos_soldaveis_por_cima |= set(layout.pin_holes(ref).values())
+
+        # Pino de capacitor ou de CI em socket nao aceita solda por cima: o corpo
+        # esta SOBRE o furo. Nao e falta de espaco - nenhuma placa maior resolve.
+        # Esses ligam-se so pelo lado da solda.
+        self.under_parts = corpos - pinos_soldaveis_por_cima
+        self.pinos_so_por_baixo = set(self.pin_of_hole) - pinos_soldaveis_por_cima
+
 
         self.history_pad = {}
         self.history_edge = {}
@@ -672,7 +713,7 @@ class Router:
         return path
 
     def _top_blocked(self, cell, net):
-        """Trilha do lado dos componentes nao passa por baixo do corpo das pecas."""
+        """O corpo da peca esta no caminho: o fio de cima nao passa por aqui."""
         return cell in self.under_parts
 
     def _neighbors(self, node, net, res, goal_cells):
@@ -685,7 +726,9 @@ class Router:
         # 1) trilha, andando furo a furo na mesma face
         passo = cfg.trace_cost if face == BOTTOM else cfg.top_trace_cost
         kind = "trace" if face == BOTTOM else "trace_top"
-        if face == BOTTOM or cfg.two_sided:
+        # No lado dos componentes so anda fio se sobrar espaco para soldar.
+        pode_andar = face == BOTTOM or cfg.usa_face_de_cima
+        if pode_andar:
             for i, (dc, dr) in enumerate(DIRS):
                 viz = (c + dc, r + dr)
                 if not spec.contains(*viz):
