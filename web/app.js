@@ -133,8 +133,11 @@ function fraseProgresso(ev) {
     case 'tentativa_concluida': {
       if (!ev.ponto || !ev.ponto.fechou) return `${t}terminou com ${ev.soltos} pino(s) solto(s)`;
       if (ev.ponto.melhorou) return `${t}fechou 100% e ficou mais fácil de montar`;
-      return `${t}${ev.fechadas} solução(ões) completa(s) · `
-           + `${ev.sem_melhora}/${ev.paciencia} sem ganho`;
+      // O contador NAO e de tentativas - e de solucoes COMPLETAS seguidas sem
+      // ganho, que e o criterio de parada. Ele anda devagar de proposito: so ~5%
+      // das tentativas fecham. Escrito como "3/60" parecia "tentativa 3 de 60".
+      return `${t}${ev.fechadas} solução(ões) completa(s) — `
+           + `${ev.sem_melhora} das últimas ${ev.paciencia} sem melhorar`;
     }
     case 'plato':
       return 'a melhora estacionou — entregando o melhor';
@@ -511,8 +514,9 @@ function legendaVeu(ev) {
     + (eco > 0
        ? `Já são ${eco}% menos serviço que a primeira que fechou. `
        : 'Ainda no mesmo trabalho da primeira que fechou. ')
-    + `A linha sobe quando ele acha uma montagem mais fácil — `
-    + `${ev.sem_melhora ?? 0}/${ev.paciencia ?? '?'} tentativas completas sem ganho.`;
+    + `A linha sobe quando ele acha uma montagem mais fácil. Ele para quando `
+    + `${ev.paciencia ?? '?'} soluções completas seguidas não melhorarem `
+    + `(vai em ${ev.sem_melhora ?? 0}).`;
 }
 
 function escondeVeu() {
@@ -834,32 +838,70 @@ function renderBuild() {
   const dot = (n) => `<span class="netdot" style="background:${netColor(n)}"></span>`;
   const face = (x) => (x.face === 'componentes' ? ' <em>(lado dos componentes)</em>' : '');
 
-  const fios = bc.fios.map((x) =>
-    `<li>${dot(x.net)}<b>${x.net}</b>: fio de <b>${x.mm} mm</b> (${x.furos} furos)
-     de ${x.de_label} a ${x.ate_label}${face(x)}</li>`).join('');
+  // Ponta que cai num furo de troca de face não termina ali: o fio passa pelo
+  // buraco e continua do outro lado. Cortar e emendar com um pedacinho seria
+  // trabalho a mais para o mesmo resultado.
+  const fios = bc.fios.map((x) => {
+    const de = x.de_atravessa ? `${x.de_label} (vindo do outro lado)` : x.de_label;
+    const ate = x.ate_atravessa ? `${x.ate_label} (atravessa para o outro lado)` : x.ate_label;
+    return `<li>${dot(x.net)}<b>${x.net}</b>: fio de <b>${x.mm} mm</b> (${x.furos} furos)
+      de ${de} a ${ate}${face(x)}</li>`;
+  }).join('');
   const pontes = bc.pontes.map((x) =>
     `<li>${dot(x.net)}<b>${x.net}</b>: ${x.de_label} + ${x.ate_label}${face(x)}</li>`).join('');
-  const juntas = bc.juntas.map((x) =>
-    `<li>${dot(x.net)}<b>${x.net}</b>: junta em <b>${x.furo_label}</b> —
-     <span class="forma">${x.formato}</span>, alcançando ${x.toca_labels.join(' e ')}${face(x)}</li>`).join('');
+  // Junta em pino é a ligação do componente com a rede: quem monta precisa do
+  // nome da peça ali, não só do furo.
+  const juntas = bc.juntas.map((x) => {
+    const onde = x.pino
+      ? `no pino <b>${x.pino}</b> (furo ${x.furo_label})`
+      : `em <b>${x.furo_label}</b>`;
+    const alcance = x.toca_labels.length
+      ? `, alcançando ${x.toca_labels.join(' e ')}` : '';
+    return `<li>${dot(x.net)}<b>${x.net}</b>: solda ${onde} —
+      <span class="forma">${x.formato}</span>${alcance}${face(x)}</li>`;
+  }).join('');
   const vias = (b.vias || []).map((x) =>
     `<li>${dot(x.net)}<b>${x.net}</b>: furo ${x.from_label}</li>`).join('');
   const jumpers = b.jumpers.map((x) =>
     `<li>${dot(x.net)}<b>${x.net}</b>: ${x.from_label} → ${x.to_label} — corte ${x.cut_mm} mm</li>`).join('');
 
-  const formas = ['linha', 'L', 'T', 'cruz']
-    .filter((k) => bt[k]).map((k) => `${bt[k]} em ${k}`).join(', ');
+  let grupoAtual = null;
+  const roteiro = (b.roteiro || []).map((p) => {
+    const cabeca = p.grupo && p.grupo !== grupoAtual
+      ? `<div class="passo-grupo">${p.grupo}</div>` : '';
+    grupoAtual = p.grupo || grupoAtual;
+    const itens = p.itens.length
+      ? `<ul>${p.itens.map((i) => `<li>${i}</li>`).join('')}</ul>` : '';
+    const det = p.detalhe ? `<div class="detalhe">${p.detalhe}</div>` : '';
+    return `${cabeca}<div class="passo" data-passo="${p.n}">
+      <span class="n">${p.n}</span>
+      <div><div class="titulo">${p.titulo}</div>${det}${itens}</div>
+    </div>`;
+  }).join('');
+
+  const formas = ['pino', 'linha', 'L', 'T', 'cruz']
+    .filter((k) => bt[k])
+    .map((k) => (k === 'pino' ? `${bt[k]} em pino` : `${bt[k]} em ${k}`)).join(', ');
   const alerta = (bc.avisos || []).length
     ? `<div class="msg err"><b>Junta impossível:</b> ${bc.avisos.join('; ')}</div>` : '';
 
   $('#build').innerHTML = `
     ${alerta}
-    <div class="msg warn">${bt.fios || 0} fios retos (${bt.fio_mm || 0} mm) ·
+    <div class="msg warn">${bt.fios || 0} fios retos (${bt.fio_mm || 0} mm${
+      bt.travessias ? `, ${bt.travessias} atravessando a placa` : ''}) ·
       ${bt.pontes || 0} pontes de solda · ${bt.juntas || 0} juntas ·
       ${t.jumpers} jumpers (${t.wire_cut_mm} mm a cortar)</div>
 
+    <h3>Passo a passo</h3>
+    <p class="hint">Nesta ordem de propósito: do <b>meio para as bordas</b>, porque cada
+      peça montada tira espaço das trilhas de cima e das vias — as ligações difíceis
+      se fazem enquanto ainda há folga. E <b>cada furo é soldado uma vez só</b>: a ponte
+      de solda sai da própria junta, nunca antes dela. Clique para riscar o que já fez.</p>
+    ${roteiro}
+
     <h3>1. Pontes de solda — furos vizinhos, sem fio nenhum</h3>
-    <p class="hint">Encosta o estanho de um no outro. É o passo mais barato: faça todos primeiro.</p>
+    <p class="hint">Lista de conferência, não ordem de execução: cada uma é feita na
+      mesma solda da junta de onde ela sai, no passo a passo acima.</p>
     <ol>${pontes || '<li>nenhuma</li>'}</ol>
 
     <h3>2. Fios retos — cortados no tamanho, soldados nas duas pontas</h3>
@@ -867,8 +909,9 @@ function renderBuild() {
     <ol>${fios || '<li>nenhum</li>'}</ol>
 
     <h3>3. Juntas — onde os fios se encontram${formas ? ` <small>(${formas})</small>` : ''}</h3>
-    <p class="hint">Aqui é só estanho, ligando o furo do meio aos vizinhos indicados.
-      Nenhuma junta passa de uma cruz — o alcance do estanho.</p>
+    <p class="hint">Aqui é só estanho. Nas de <b>pino</b>, é a solda que liga o
+      terminal do componente à fiação. Nenhuma junta passa de uma cruz — o alcance
+      do estanho.</p>
     <ol>${juntas || '<li>nenhuma</li>'}</ol>
 
     <h3>4. Vias — fio atravessando o furo, soldado nas duas faces</h3>
@@ -1097,63 +1140,90 @@ function abrirArquivo(f) {
 
 function buildText() {
   const r = S.result, b = r.build;
+  const bc = b.bancada || { totais: {}, fios: [], pontes: [], juntas: [] };
+  const bt = bc.totais || {};
   const L = [];
-  L.push('PERFBOARD - GUIA DE MONTAGEM');
-  L.push('Netlist: ' + S.fileName);
-  L.push(`Placa: ${r.board.cols} x ${r.board.rows} furos (${r.board.width_mm} x ${r.board.height_mm} mm)`);
-  L.push(`Redes roteadas: ${r.stats.nets_routed}  |  incompletas: ${r.stats.nets_failed}`);
-  L.push(`Trabalho manual: ${r.stats.operacoes ?? '?'} operacoes `
-         + `(${r.stats.corridas ?? '?'} trechos retos, ${r.stats.quinas ?? '?'} dobras, `
-         + `${r.stats.vias || 0} vias, ${r.stats.jumpers} jumpers)`);
+  const risca = (t) => L.push(t);
+
+  risca('PERFBOARD - MANUAL DE MONTAGEM');
+  risca('='.repeat(60));
+  risca('Netlist: ' + S.fileName);
+  risca(`Placa: ${r.board.cols} x ${r.board.rows} furos `
+        + `(${r.board.width_mm} x ${r.board.height_mm} mm)`);
+  risca(`Redes: ${r.stats.nets_routed} roteadas, ${r.stats.nets_failed} incompletas`);
+  risca('');
+  risca('O QUE VOCE VAI FAZER:');
+  risca(`  ${bt.pontes || 0} pontes de solda (furos vizinhos, sem fio — cada uma`
+        + ' sai da mesma solda da junta ao lado)');
+  risca(`  ${bt.fios || 0} fios retos, ${bt.fio_mm || 0} mm no total`
+        + (bt.travessias ? `, ${bt.travessias} atravessando a placa` : ''));
+  risca(`  ${bt.juntas || 0} pontos de solda`
+        + (bt.pino ? ` (${bt.pino} deles em terminal de componente)` : ''));
+  // A via com fio passando ja esta contada no fio. A que fica entre duas pontes de
+  // solda nao tem fio nenhum: ela pede um toco de terminal enfiado no furo, e sem
+  // aparecer aqui ninguem separa a sobra antes de comecar.
+  const viasNuas = (b.roteiro || []).filter((p) => p.titulo.startsWith('Via no furo '));
+  risca(`  ${(b.vias || []).length} vias (${viasNuas.length} sem fio passando: `
+        + 'precisam de um toco de terminal enfiado no furo)');
+  if (r.stats.jumpers) {
+    risca(`  ${r.stats.jumpers} jumpers, ${b.totals.wire_cut_mm} mm de fio isolado a cortar`);
+  }
+  risca('');
+  risca('COORDENADAS: como estao impressas na SUA placa, vistas pelo lado dos');
+  risca('componentes. Confira no desenho antes de comecar.');
+  risca('');
+
   const soltos = r.stats.orphan_pins || [];
   if (soltos.length) {
-    L.push('');
-    L.push('!! ATENCAO: ' + soltos.length + ' PINO(S) SEM LIGACAO - ligue estes a mao:');
-    for (const o of soltos) L.push(`   ${o.ref}.${o.pin} no furo ${o.label} (rede ${o.net})`);
+    risca('!! ATENCAO: ' + soltos.length + ' PINO(S) SEM LIGACAO - ligue estes a mao:');
+    for (const o of soltos) risca(`   ${o.ref}.${o.pin} no furo ${o.label} (rede ${o.net})`);
+    risca('');
   }
-  L.push('');
-  L.push('COORDENADAS: linha em letra + coluna em numero (A1 = furo superior esquerdo),');
-  L.push('vistas pelo LADO DOS COMPONENTES.');
-  L.push('');
-  L.push('1) COMPONENTES');
-  for (const c of b.components) {
-    const pins = Object.entries(c.pin_labels).map(([p, lb]) => `${p}:${lb}`).join('  ');
-    L.push(`  ${c.ref.padEnd(5)} origem ${c.origin_label} rot ${c.rot}deg  [${c.pattern}]`);
-    L.push(`         pinos ${pins}`);
+  const probs = r.montagem_problemas || [];
+  if (probs.length) {
+    risca('!! O programa achou problemas de montagem no proprio resultado:');
+    for (const x of probs) risca('   - ' + x);
+    risca('');
   }
-  L.push('');
-  const dec = r.decoupling || [];
-  if (dec.length) {
-    L.push('');
-    L.push('1b) DESACOPLAMENTO - montar estes PRIMEIRO e o mais curto possivel');
-    for (const d of dec) {
-      L.push(`   ${d.cap} junto de ${d.ic} - laco ${d.laco_mm ?? '?'} mm `
-             + `(minimo possivel ${d.piso_mm ?? '?'} mm)`);
-      L.push(`      ${d.net_pwr}: ${d.pwr_de || '?'} -> ${d.pwr_ate || '?'} (${d.pwr_mm ?? '?'} mm)`);
-      L.push(`      ${d.net_gnd}: ${d.gnd_de || '?'} -> ${d.gnd_ate || '?'} (${d.gnd_mm ?? '?'} mm)`);
+
+  // O roteiro e o mesmo da tela: peca baixa primeiro (a placa precisa assentar
+  // quando voce virar), depois a fiacao rede por rede (para testar cada uma
+  // antes de seguir).
+  let grupo = null;
+  for (const p of (b.roteiro || [])) {
+    if (p.grupo && p.grupo !== grupo) {
+      grupo = p.grupo;
+      risca('');
+      risca('-- ' + grupo.toUpperCase() + ' ' + '-'.repeat(Math.max(0, 56 - grupo.length)));
     }
-    L.push('');
+    risca(`[ ] ${String(p.n).padStart(3)}. ${p.titulo}`);
+    if (p.detalhe) {
+      for (const linha of quebra(p.detalhe, 66)) risca('          ' + linha);
+    }
+    for (const item of p.itens) risca('          - ' + item);
   }
-  L.push('2) TRILHAS NO LADO DA SOLDA (fio nu / ponte de solda)');
-  for (const x of b.bridges) L.push(`  ${x.net.padEnd(18)} ${x.from_label.padEnd(5)} -> ${x.to_label.padEnd(5)}  ${x.holes} furos, ${x.length_mm} mm`);
-  if ((b.vias || []).length) {
-    L.push('');
-    L.push('3) VIAS (pedaco de fio no furo, soldado dos DOIS lados)');
-    for (const x of b.vias) L.push(`  ${x.net.padEnd(18)} furo ${x.from_label}`);
-  }
-  if ((b.top_bridges || []).length) {
-    L.push('');
-    L.push('4) TRILHAS NO LADO DOS COMPONENTES (fio nu por cima)');
-    for (const x of b.top_bridges) L.push(`  ${x.net.padEnd(18)} ${x.from_label.padEnd(5)} -> ${x.to_label.padEnd(5)}  ${x.holes} furos, ${x.length_mm} mm`);
-  }
-  L.push('');
-  L.push('5) JUMPERS (fio isolado sobrevoando)');
-  for (const x of b.jumpers) L.push(`  ${x.net.padEnd(18)} ${x.from_label.padEnd(5)} -> ${x.to_label.padEnd(5)}  cortar ${x.cut_mm} mm`);
-  L.push('');
-  L.push(`TOTAIS: ${b.totals.bridges} trilhas na solda (${b.totals.bridge_mm} mm), ` +
-         `${b.totals.top_bridges || 0} por cima (${b.totals.top_bridge_mm || 0} mm), ` +
-         `${b.totals.vias || 0} vias, ${b.totals.jumpers} jumpers (${b.totals.wire_cut_mm} mm).`);
+
+  risca('');
+  risca('='.repeat(60));
+  risca('Gerado por Perfboard Router. Fio reto, ponte de solda e junta:');
+  risca('nao ha nada para dobrar neste manual, e nenhum furo e soldado duas vezes.');
   return L.join('\n');
+}
+
+// Quebra o texto em linhas curtas para o arquivo ficar legivel impresso.
+function quebra(txt, largura) {
+  const out = [];
+  let linha = '';
+  for (const palavra of String(txt).split(/\s+/)) {
+    if ((linha + ' ' + palavra).trim().length > largura) {
+      if (linha) out.push(linha.trim());
+      linha = palavra;
+    } else {
+      linha += ' ' + palavra;
+    }
+  }
+  if (linha.trim()) out.push(linha.trim());
+  return out;
 }
 
 function doExport(kind) {
@@ -1306,6 +1376,12 @@ function bind() {
     const chave = campo.dataset.passo !== undefined ? 'passo' : 'largura';
     const alvo = campo.closest('.pin-campo').querySelector(`[data-mm-de="${chave}"]`);
     if (alvo) alvo.textContent = ((+campo.value || 0) * 2.54).toFixed(2).replace('.', ',') + ' mm';
+  });
+
+  // Riscar o que ja foi feito e o minimo para nao se perder no meio da montagem.
+  $('#build').addEventListener('click', (e) => {
+    const passo = e.target.closest('.passo');
+    if (passo) passo.classList.toggle('feito');
   });
 
   $('#complist').addEventListener('click', (e) => {

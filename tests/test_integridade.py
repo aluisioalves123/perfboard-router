@@ -328,6 +328,571 @@ class TestIntegridade(unittest.TestCase):
         auto_place(lay, nl, seed=3, effort="rapido")
         return nl, lay
 
+    FACE_NUM = {"solda": 0, "componentes": 1}
+
+    @staticmethod
+    def _passos(a, b):
+        """Quebra um trecho reto nos passos de furo a furo que ele cobre."""
+        dx = (b[0] > a[0]) - (b[0] < a[0])
+        dy = (b[1] > a[1]) - (b[1] < a[1])
+        n = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+        saida = []
+        for k in range(n):
+            u = (a[0] + dx * k, a[1] + dy * k)
+            v = (a[0] + dx * (k + 1), a[1] + dy * (k + 1))
+            saida.append((min(u, v), max(u, v)))
+        return saida
+
+    def _plano(self, **kw):
+        res = self.solve_case(router=dict({"faces": 2, "allow_jumpers": True}, **kw))
+        return res, res["build"]["bancada"]
+
+    def test_duas_pontas_nunca_dividem_o_furo_nem_apos_recuar(self):
+        """Recuar uma ponta pode joga-la em cima de OUTRA ponta, um furo adiante.
+
+        Regressao achada na placa do usuario: o separador rodava uma passada so,
+        entao o conflito criado pelo proprio recuo passava batido. Aqui os fios sao
+        montados de proposito para que o primeiro recuo gere o segundo conflito.
+        """
+        from perfboard.bancada import _separa_pontas
+
+        # tres fios terminando em furos vizinhos, em fila: ao recuar, um cai no outro
+        segs = [((0, 0), (4, 0)), ((4, 0), (4, 4)), ((3, 0), (3, 5))]
+        fios, _pontes = _separa_pontas(segs)
+        pontas = [p for f in fios for p in f]
+        self.assertEqual(len(pontas), len(set(pontas)),
+                         "sobrou furo com duas pontas: %s" % pontas)
+
+    def test_ponta_de_fio_nunca_cai_onde_ja_passa_outro_fio(self):
+        """Nao se solda a ponta de um fio em cima de outro fio deitado na ilha.
+
+        E o mesmo caso do terminal, e demorei a enxergar: eu tratava "um fio
+        comprido e outro que se encontra ali" como contato direto, quando o que
+        acontece e o segundo parar um furo antes e uma ponte de solda ligar os dois.
+        Achado na placa do usuario, nos furos N8 e D14.
+        """
+        from perfboard.bancada import _celulas
+
+        res, plano = self._plano(faces=2, allow_jumpers=True)
+        for face in ("solda", "componentes"):
+            daqui = [f for f in plano["fios"] if f["face"] == face]
+            ocupa = {}
+            for i, f in enumerate(daqui):
+                for c in _celulas(tuple(f["de"]), tuple(f["ate"])):
+                    ocupa.setdefault(c, set()).add(i)
+            for i, f in enumerate(daqui):
+                for ponta, cruza in ((tuple(f["de"]), f["de_atravessa"]),
+                                     (tuple(f["ate"]), f["ate_atravessa"])):
+                    if cruza:
+                        continue
+                    self.assertFalse(
+                        ocupa.get(ponta, set()) - {i},
+                        "fio de %s termina em %s, onde ja passa outro fio"
+                        % (f["net"], f["de_label"]))
+
+    def test_o_programa_confere_a_propria_montagem(self):
+        """A conferencia das regras de bancada roda sozinha e sai limpa.
+
+        Existe para o usuario nao ter de cacar isso a olho no desenho - foi assim
+        que os erros anteriores apareceram, e custou caro aos dois lados.
+        """
+        res, _plano = self._plano(faces=2, allow_jumpers=True)
+        self.assertEqual(res["montagem_problemas"], [])
+
+    def test_fio_nunca_termina_em_furo_de_terminal(self):
+        """Nada conecta ao pino a nao ser estanho.
+
+        Na bancada o fio nao encosta no terminal: para um furo antes, e uma ponte
+        de solda faz a ligacao. O desenho mostrava o fio chegando no pino, que e
+        uma coisa que ninguem consegue montar.
+        """
+        res, plano = self._plano(faces=2, allow_jumpers=True)
+        pinos = {(p["col"], p["row"]) for p in res["layout"]["pins"]}
+        self.assertTrue(pinos)
+
+        for f in plano["fios"]:
+            for ponta, atravessa in ((tuple(f["de"]), f["de_atravessa"]),
+                                     (tuple(f["ate"]), f["ate_atravessa"])):
+                if atravessa:
+                    continue        # ali o fio nao termina: passa para o outro lado
+                self.assertNotIn(ponta, pinos,
+                                 "fio de %s termina no terminal %s - deveria parar "
+                                 "um furo antes e ligar com solda"
+                                 % (f["net"], f["de_label"]))
+
+    def test_todo_pino_ligado_aparece_como_ponto_de_solda(self):
+        """Onde a fiacao encosta num terminal, tem de haver solda marcada.
+
+        Fio PASSANDO por cima de um pino esta liberado: ele deita sobre a ilha e o
+        estanho ali faz a ligacao - que continua sendo solda conectando o terminal,
+        nunca o fio encostando por conta propria. O que nao pode e o fio TERMINAR
+        no pino, e disso cuida o teste acima.
+        """
+        res, plano = self._plano(faces=2, allow_jumpers=True)
+        pinos = {(p["col"], p["row"]) for p in res["layout"]["pins"]}
+
+        def celulas(x):
+            a, b = tuple(x["de"]), tuple(x["ate"])
+            d = ((b[0] > a[0]) - (b[0] < a[0]), (b[1] > a[1]) - (b[1] < a[1]))
+            n = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+            return [(a[0] + d[0] * k, a[1] + d[1] * k) for k in range(n + 1)]
+
+        tocados = {c for x in plano["fios"] + plano["pontes"]
+                   for c in celulas(x) if c in pinos}
+        marcados = {tuple(j["furo"]) for j in plano["juntas"] if j["formato"] == "pino"}
+        self.assertEqual(tocados - marcados, set(),
+                         "pino tocado pela fiacao sem solda marcada: %s"
+                         % sorted(tocados - marcados))
+
+    def test_via_nao_e_uma_segunda_ponta_de_fio_no_furo(self):
+        """Via e o proprio fio atravessando o furo, nao outro pedaco.
+
+        Regressao achada na bancada: 23 furos tinham a ponta de um fio dividindo o
+        buraco com uma via - e via tambem e fio. Duas pontas no mesmo furo, que e
+        justamente o que nao existe. Na pratica passa-se a ponta do proprio fio
+        pelo furo e segue do outro lado.
+        """
+        res, plano = self._plano(faces=2, allow_jumpers=False)
+        vias = {}
+        for rota in res["routes"]:
+            for seg in rota["segments"]:
+                if seg["type"] == "via":
+                    vias.setdefault(rota["name"], set()).add(tuple(seg["from"]))
+        if not any(vias.values()):
+            self.skipTest("este layout nao usou via")
+
+        for f in plano["fios"]:
+            das_minhas = vias.get(f["net"], set())
+            for ponta, atravessa in ((tuple(f["de"]), f["de_atravessa"]),
+                                     (tuple(f["ate"]), f["ate_atravessa"])):
+                if ponta in das_minhas:
+                    self.assertTrue(atravessa,
+                                    "fio de %s termina em %s, que tem via: deveria "
+                                    "atravessar" % (f["net"], f["de_label"]))
+
+    def test_travessia_aparece_como_via_e_nao_como_fim_de_fio(self):
+        """Onde o fio passa para o outro lado, quem marca o ponto e a via.
+
+        Nao existe marcador de "ponta de fio" no desenho: depois das regras da
+        bancada, toda ponta cai onde ja ha solda desenhada - ponte, junta ou
+        travessia. Marcar de novo era inventar um terceiro tipo de ponto.
+        """
+        res, plano = self._plano(faces=2, allow_jumpers=False)
+        self.assertEqual(res["svg_bottom"].count("solda na ponta do fio"), 0)
+        self.assertEqual(res["svg_top"].count("solda na ponta do fio"), 0)
+
+        travessias = [f for f in plano["fios"]
+                      if f["de_atravessa"] or f["ate_atravessa"]]
+        if travessias:
+            # cada travessia tem de ter uma via desenhada naquele furo
+            vias = {tuple(s["from"]) for r in res["routes"] for s in r["segments"]
+                    if s["type"] == "via"}
+            for f in travessias:
+                for ponta, cruza in ((tuple(f["de"]), f["de_atravessa"]),
+                                     (tuple(f["ate"]), f["ate_atravessa"])):
+                    if cruza:
+                        self.assertIn(ponta, vias)
+
+    def test_pino_tocado_pela_fiacao_e_ponto_de_solda(self):
+        """O furo do terminal tambem leva ferro - e ali que a peca entra na rede.
+
+        Marcavamos junta so onde dois fios se encontram, entao um fio passando por
+        cima de um pino nao aparecia como solda em lugar nenhum.
+        """
+        res, plano = self._plano()
+        pinos = {(p["col"], p["row"]): "%s.%s" % (p["ref"], p["pin"])
+                 for p in res["layout"]["pins"]}
+
+        em_pino = [j for j in plano["juntas"] if j["formato"] == "pino"]
+        self.assertTrue(em_pino, "nenhuma solda em pino foi marcada")
+        for j in em_pino:
+            furo = tuple(j["furo"])
+            self.assertIn(furo, pinos, "junta 'pino' num furo que nao tem terminal")
+            self.assertEqual(j["pino"], pinos[furo])
+
+        # todo furo de pino coberto pela fiacao tem de estar marcado
+        def celulas(x):
+            a, b = tuple(x["de"]), tuple(x["ate"])
+            dx = (b[0] > a[0]) - (b[0] < a[0])
+            dy = (b[1] > a[1]) - (b[1] < a[1])
+            n = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+            return [(a[0] + dx * k, a[1] + dy * k) for k in range(n + 1)]
+
+        marcados = {tuple(j["furo"]) for j in em_pino}
+        for x in plano["fios"] + plano["pontes"]:
+            for c in celulas(x):
+                if c in pinos:
+                    self.assertIn(c, marcados,
+                                  "fiacao passa pelo pino %s e nao ha solda marcada"
+                                  % pinos[c])
+
+    def test_juncao_em_T_e_um_fio_comprido_mais_um_ramo(self):
+        """Tres fios nao se encontram num furo - isso nao existe na bancada.
+
+        Numa derivacao o que se faz e UM fio passando reto e outro encontrando ele
+        ali. Se o roteador quebrou a reta em dois pedacos por causa da derivacao,
+        cabe ao guia junta-los de volta: montar em dois seria cortar dois fios e
+        emendar no meio.
+        """
+        from perfboard.bancada import _funde_colineares, _separa_pontas
+
+        # reta de (0,0) a (6,0) partida na derivacao, mais o ramo subindo
+        segs = [((0, 0), (3, 0)), ((3, 0), (6, 0)), ((3, 0), (3, 4))]
+        fios, pontes = _separa_pontas(_funde_colineares(segs))
+
+        comprido = max(fios, key=lambda t: max(abs(t[1][0] - t[0][0]),
+                                               abs(t[1][1] - t[0][1])))
+        self.assertEqual(sorted(comprido), [(0, 0), (6, 0)],
+                         "a reta tinha de voltar a ser um fio so")
+        # O ramo NAO encosta na reta: para um furo antes e o estanho liga. Soldar a
+        # ponta de um fio em cima de outro fio deitado nao existe na bancada.
+        self.assertTrue(pontes, "o ramo deveria chegar na reta por ponte de solda")
+        for a, b in pontes:
+            self.assertEqual(max(abs(b[0] - a[0]), abs(b[1] - a[1])), 1)
+
+    def test_quina_vira_fio_mais_ponte(self):
+        """Quina nao e fusao de dois fios: um vai ate ela, o outro comeca ao lado."""
+        from perfboard.bancada import _funde_colineares, _separa_pontas
+
+        segs = [((0, 0), (3, 0)), ((3, 0), (3, 4))]
+        fios, pontes = _separa_pontas(_funde_colineares(segs))
+        self.assertEqual(len(pontes), 1, "faltou a ponte de solda da quina")
+        a, b = pontes[0]
+        self.assertEqual(max(abs(b[0] - a[0]), abs(b[1] - a[1])), 1)
+        pontas = [p for f in fios for p in f]
+        self.assertEqual(len(pontas), len(set(pontas)), "duas pontas no mesmo furo")
+
+    def test_reta_partida_volta_a_ser_um_fio(self):
+        """Dois pedacos em linha reta sao um fio so, nao dois emendados."""
+        from perfboard.bancada import _funde_colineares
+
+        self.assertEqual(len(_funde_colineares([((0, 0), (3, 0)), ((3, 0), (6, 0))])), 1)
+        # quina NAO funde: os pedacos mudam de eixo
+        self.assertEqual(len(_funde_colineares([((0, 0), (3, 0)), ((3, 0), (3, 4))])), 2)
+
+    def _coord_de_rotulo(self, res):
+        """rotulo do furo -> (coluna, linha), como o guia numera a placa."""
+        from perfboard.board import BoardSpec, rotulador
+        spec = BoardSpec.from_json(res["board"])
+        nome = rotulador(spec, res.get("label_style", "letra"))
+        return {nome(c, r): (c, r)
+                for c in range(spec.cols) for r in range(spec.rows)}
+
+    def test_montar_seguindo_o_manual_da_o_circuito_da_netlist(self):
+        """A prova final: montar no papel so com o que o texto manda fazer.
+
+        As conferencias antigas olhavam o PLANO - e o plano estava certo. O que
+        estava errado era o que o manual mandava fazer com ele, e por isso tres
+        defeitos passaram: 8 pontes que nao apareciam em passo nenhum, 16 vias
+        nunca mencionadas e pontes sem dizer de que face. Nenhum era visivel no
+        plano; todos partem uma rede aqui.
+        """
+        from perfboard import footprints as fpmod
+        from perfboard.netlist import parse_netlist
+        from tests.montagem_no_papel import problemas, pinos_so_por_baixo
+
+        nl = parse_netlist(self.text)
+        so_por_baixo = pinos_so_por_baixo(fpmod.build_library(nl, {}))
+
+        for faces in (1, 2):
+            for seed in (1, 2, 3, 4, 5):
+                res = self.solve_case(placer={"effort": "rapido", "seed": seed},
+                                      router={"faces": faces})
+                achados = problemas(res["build"]["roteiro"],
+                                    self._coord_de_rotulo(res), nl, so_por_baixo,
+                                    faces=self._faces(res))
+                self.assertEqual(
+                    achados, [],
+                    "montando pelo manual (faces=%d, semente %d) a placa nao fecha:"
+                    "\n  " % (faces, seed) + "\n  ".join(achados))
+
+    def test_via_entre_duas_pontes_vira_um_passo_de_verdade(self):
+        """Via e um fio atravessando o furo - nao um vizinho para onde puxar solda.
+
+        Regressao de bancada. Quando os dois lados da via sao pontes de solda nao
+        sobra fio nenhum passando pelo furo, e a via sumia do roteiro: o guia
+        mandava "puxe a ponte ate H18" e nunca dizia o que H18 era. Junto com ela
+        sumia a ponte do outro lado, porque eu descartava ponte cujos dois furos
+        parecessem vazios - e furo de via parece vazio.
+
+        O caso e montado a mao porque o exemplo do repositorio e facil demais para
+        produzir uma via dessas.
+        """
+        from perfboard.bancada import plano_de_montagem
+        from perfboard.manual import monta_roteiro
+
+        nl, lay = self._layout_de_teste()
+        ref = sorted(lay.placements)[0]
+        (col, row) = sorted(lay.pin_holes(ref).values())[0]
+
+        # O caso do H18: pino -> ponte por baixo -> VIA -> ponte por cima. Os dois
+        # trechos tem vao 1, entao viram PONTE e nao sobra fio nenhum passando pelo
+        # furo da via - que e exatamente quando ela sumia do roteiro.
+        via = (col + 1, row)
+        rotas = [{
+            "name": "REDE_DA_VIA", "ok": True,
+            "segments": [
+                {"type": "trace", "layer": 0, "from": [col, row],
+                 "to": [via[0], via[1]], "length_mm": 2.54},
+                {"type": "via", "layer": -1, "from": [via[0], via[1]],
+                 "to": [via[0], via[1]], "length_mm": 0.0},
+                {"type": "trace_top", "layer": 1, "from": [via[0], via[1]],
+                 "to": [via[0] + 1, via[1]], "length_mm": 2.54},
+            ],
+            "holes": [],
+        }]
+        nome = lambda c, r: "%s%d" % (chr(ord("A") + c), r + 1)
+        pinos = {(col, row): (ref, "1")}
+        plano = plano_de_montagem(rotas, nome, pinos)
+        roteiro = monta_roteiro(lay, plano, rotas, nome, netlist=nl)
+
+        # 1) a via existe como passo, e diz para enfiar fio no furo
+        vias = [p for p in roteiro if p["titulo"].startswith("Via no furo ")]
+        self.assertEqual([p["titulo"].split()[3] for p in vias], [nome(*via)],
+                         "a via de %s nao virou passo nenhum" % nome(*via))
+        self.assertIn("Enfie uma sobra de terminal", vias[0]["detalhe"],
+                      "o passo da via tem de mandar enfiar fio no furo")
+
+        # 2) nenhuma ponte do plano pode faltar no roteiro
+        from tests.montagem_no_papel import pontes_do_item
+        ditas = set()
+        for p in roteiro:
+            for item in p["itens"]:
+                for x, y, _face in pontes_do_item(item):
+                    ditas.add(frozenset((x, y)))
+        for b in plano["pontes"]:
+            self.assertIn(frozenset((b["de_label"], b["ate_label"])), ditas,
+                          "a ponte %s+%s nao aparece em passo nenhum do roteiro"
+                          % (b["de_label"], b["ate_label"]))
+
+        # 3) cada ponte diz de que FACE e. Numa placa de duas faces o furo tem duas
+        # ilhas, e "puxe a ponte ate X" sem o lado e instrucao pela metade - na
+        # placa real do projeto 23 das 121 pontes sao do lado dos componentes.
+        lados = {}
+        for p in roteiro:
+            for item in p["itens"]:
+                for x, y, face in pontes_do_item(item):
+                    lados[frozenset((x, y))] = "por cima" if face else "por baixo"
+        for b in plano["pontes"]:
+            chave = frozenset((b["de_label"], b["ate_label"]))
+            esperado = "por cima" if b["face"] == "componentes" else "por baixo"
+            self.assertEqual(lados.get(chave), esperado,
+                             "a ponte %s+%s e da face %s e o guia disse %r"
+                             % (b["de_label"], b["ate_label"], b["face"],
+                                lados.get(chave)))
+        self.assertIn("por cima", set(lados.values()),
+                      "este caso tinha de exercitar uma ponte do lado de cima")
+
+        # 4) a via vem ANTES de qualquer ponte no furo dela: primeiro o fio
+        # atravessa, depois se solda. O contrario e furo entupido.
+        n_via = vias[0]["n"]
+        for p in roteiro:
+            for item in p["itens"]:
+                if nome(*via) in item and item.startswith("na MESMA solda"):
+                    self.assertGreaterEqual(
+                        p["n"], n_via,
+                        "passo %d solda %s antes da via, que so vem no passo %d"
+                        % (p["n"], nome(*via), n_via))
+
+    def test_ponte_nunca_e_anunciada_antes_do_fio_que_cai_no_furo(self):
+        """Um furo, uma solda: a ponte sai da junta, nao antes dela.
+
+        Regressao vinda da bancada: o roteiro mandava fazer a ponte F18+G18 no
+        passo 3 e so no passo 10 passar o fio que termina em F18. Na pratica o furo
+        ja estava cheio de estanho - para enfiar o fio era preciso reaquecer e
+        limpar. Ponte de solda nao e uma operacao separada; e o estanho da propria
+        junta puxado ate a ilha vizinha, feito de uma vez so.
+
+        O teste le SO o texto do roteiro, que e o que o usuario tem na mao.
+        """
+        import re
+        from tests.montagem_no_papel import pontes_do_item
+
+        res = self.solve_case()
+        roteiro = res["build"]["roteiro"]
+
+        # em que passo cada furo recebe um terminal ou uma ponta de fio
+        ocupado_em = {}
+        for passo in roteiro:
+            for item in passo["itens"]:
+                m = re.match(r"pino \S+ no furo (\S+)$", item)
+                if m:
+                    ocupado_em.setdefault(m.group(1), []).append(passo["n"])
+            if passo["titulo"].startswith("Fio de ") or passo["titulo"].startswith("Jumper de "):
+                for rotulo in re.findall(r"\bde (\S+?)[ ,.]|\ba (\S+?)[ ,.]",
+                                         passo["detalhe"]):
+                    furo = rotulo[0] or rotulo[1]
+                    if furo and re.match(r"^[A-Z]+\d+$", furo):
+                        ocupado_em.setdefault(furo, []).append(passo["n"])
+
+        cedo = []
+        for passo in roteiro:
+            for item in passo["itens"]:
+                # as DUAS ilhas contam: a ponte poe estanho nas duas, e a que
+                # recebe e justamente a que o texto nao destaca
+                for x, y, _face in pontes_do_item(item):
+                  for furo in (x, y):
+                    for quando in ocupado_em.get(furo, ()):
+                        if quando > passo["n"]:
+                            cedo.append("passo %d poe estanho em %s, mas so o passo "
+                                        "%d enfia o terminal ou a ponta de fio nesse "
+                                        "furo" % (passo["n"], furo, quando))
+
+        self.assertEqual(cedo, [], "ponte mandada antes da hora:\n  " + "\n  ".join(cedo))
+
+    def test_nenhuma_ilha_e_soldada_em_dois_passos(self):
+        """Pontes ligadas entre si sao um cordao de solda so, feito de uma vez.
+
+        Regressao de bancada, encontrada em F18-G18-H18 pela face de cima: a ponte
+        H18+G18 caia no passo da via e a F18+G18 no passo do fio, entao o guia
+        mandava soldar G18 duas vezes - a segunda so depois que o fio chegasse.
+        Reaquecer o que ja estava pronto e exatamente o que este roteiro existe
+        para evitar.
+
+        A regra que sai disso e simples de conferir: nenhuma ILHA (furo mais face)
+        pode receber estanho em dois passos diferentes.
+        """
+        from tests.montagem_no_papel import pontes_do_item
+
+        for faces in (1, 2):
+            for seed in (1, 2, 3, 4, 5):
+                res = self.solve_case(placer={"effort": "rapido", "seed": seed},
+                                      router={"faces": faces})
+                quando = {}
+                for passo in res["build"]["roteiro"]:
+                    for item in passo["itens"]:
+                        for x, y, face in pontes_do_item(item):
+                            for furo in (x, y):
+                                quando.setdefault((furo, face), set()).add(passo["n"])
+                duas = {ilha: sorted(n) for ilha, n in quando.items() if len(n) > 1}
+                self.assertEqual(
+                    duas, {},
+                    "faces=%d semente %d: ilha soldada em mais de um passo — %s"
+                    % (faces, seed, duas))
+
+    def test_desenho_e_guia_contam_a_mesma_coisa(self):
+        """O SVG e o texto tem de sair do mesmo plano, item a item.
+
+        Ja divergiram duas vezes - nas juntas, e depois em fio e ponte, quando o
+        desenho ainda vinha dos segmentos crus do roteador. Contar duas vezes a
+        mesma coisa e garantia de divergir de novo.
+        """
+        res, plano = self._plano()
+        svg = res["svg_bottom"]
+        self.assertEqual(svg.count("ponte de solda"), plano["totais"]["pontes"],
+                         "o desenho tem outro numero de pontes que o guia")
+        das_faces = sum(1 for j in plano["juntas"] if j["face"] == "solda")
+        self.assertEqual(svg.count("junta de solda"), das_faces)
+        # ponta de fio nao e marcador: ela sempre cai onde ja ha solda desenhada
+        self.assertEqual(svg.count("solda na ponta do fio"), 0)
+
+    def test_um_furo_recebe_a_ponta_de_um_fio_so(self):
+        """Duas pontas de fio nao entram no mesmo furo.
+
+        Uma quina nao e a fusao de dois fios - isso nao existe na bancada. O
+        primeiro fio vai ate a quina, o segundo comeca no furo VIZINHO, e uma
+        ponte de solda liga os dois.
+        """
+        _res, plano = self._plano()
+        pontas = {}
+        for f in plano["fios"]:
+            for ponta in (tuple(f["de"]), tuple(f["ate"])):
+                chave = (f["face"], ponta)
+                pontas[chave] = pontas.get(chave, 0) + 1
+        repetidos = {k: v for k, v in pontas.items() if v > 1}
+        self.assertEqual(repetidos, {},
+                         "furo com mais de uma ponta de fio: %s" % repetidos)
+
+    def test_o_plano_cobre_exatamente_o_que_foi_roteado(self):
+        """Traduzir para fio e ponte nao pode perder nem inventar ligacao.
+
+        E a verificacao que sustenta as outras: se o guia descreve um conjunto de
+        passos diferente do que o roteador fechou, quem monta constroi outro
+        circuito.
+        """
+        res, plano = self._plano()
+
+        roteado = set()
+        for rota in res["routes"]:
+            for seg in rota["segments"]:
+                if seg["type"] not in ("trace", "trace_top"):
+                    continue
+                for e in self._passos(tuple(seg["from"]), tuple(seg["to"])):
+                    roteado.add((rota["name"], seg["layer"]) + e)
+
+        montado = set()
+        for x in plano["fios"] + plano["pontes"]:
+            for e in self._passos(tuple(x["de"]), tuple(x["ate"])):
+                montado.add((x["net"], self.FACE_NUM[x["face"]]) + e)
+
+        self.assertEqual(roteado - montado, set(), "o guia perdeu ligacoes")
+        self.assertEqual(montado - roteado, set(), "o guia inventou ligacoes")
+
+    def test_ponte_e_sempre_entre_furos_vizinhos(self):
+        """Ponte de solda so existe entre furos encostados - senao precisaria de fio."""
+        _res, plano = self._plano()
+        for b in plano["pontes"]:
+            a, c = tuple(b["de"]), tuple(b["ate"])
+            dist = max(abs(c[0] - a[0]), abs(c[1] - a[1]))
+            self.assertEqual(dist, 1, "ponte de %s a %s tem %d furos de vao"
+                             % (b["de_label"], b["ate_label"], dist))
+
+    def test_junta_nunca_passa_de_uma_cruz(self):
+        """O estanho alcanca o furo do meio e os quatro vizinhos, nao mais."""
+        _res, plano = self._plano()
+        for j in plano["juntas"]:
+            self.assertLessEqual(len(j["toca"]), 4,
+                                 "junta em %s alcancaria %d furos"
+                                 % (j["furo_label"], len(j["toca"])))
+            for v in j["toca"]:
+                dist = max(abs(v[0] - j["furo"][0]), abs(v[1] - j["furo"][1]))
+                self.assertEqual(dist, 1, "junta em %s alcancando furo distante"
+                                 % j["furo_label"])
+        self.assertEqual(plano["avisos"], [])
+
+    def _pinos_so_por_baixo(self, res):
+        pinos = {(p["col"], p["row"]): (p["ref"], p["pin"])
+                 for p in res["layout"]["pins"]}
+        fps = res["layout"]["footprints"]
+        return pinos, {c for c, (ref, _) in pinos.items()
+                       if fps.get(ref, {}).get("estorva_solda", True)}
+
+    def test_pino_soldado_so_por_baixo_nao_entra_na_rede_pela_face_de_cima(self):
+        """A ilha de cima de um pino de capacitor ou CI nao pertence a rede.
+
+        Regressao encontrada na bancada, nao aqui: bloquear a PASSAGEM pela face de
+        cima nao bastava. O roteador semeava as DUAS faces em todo furo de terminal
+        ("o terminal liga os dois lados"), e o A* entrava por ali. Premissa falsa
+        quando o terminal so pode ser soldado por baixo.
+
+        Conferimos os furos que cada rede reivindica - e nao so os trechos
+        desenhados - porque a semeadura acontece sempre, mesmo quando o caminho
+        escolhido acaba nao passando ali. Testar pelo desenho passava por sorte.
+        """
+        for faces, jump in ((2, False), (2, True)):
+            res = self.solve_case(router={"faces": faces, "allow_jumpers": jump})
+            pinos, so_por_baixo = self._pinos_so_por_baixo(res)
+            self.assertTrue(so_por_baixo, "o exemplo precisa ter capacitor ou CI")
+
+            for rota in res["routes"]:
+                for c, r, face in rota["holes"]:
+                    if face != 1:
+                        continue
+                    self.assertNotIn(
+                        (c, r), so_por_baixo,
+                        "rede %s reivindica a ilha de cima de %s.%s, que so aceita "
+                        "solda por baixo" % (rota["name"], *pinos.get((c, r), ("?", "?"))))
+
+                for seg in rota["segments"]:
+                    if seg.get("layer") != 1:
+                        continue
+                    for ponta in (tuple(seg["from"]), tuple(seg["to"])):
+                        self.assertNotIn(
+                            ponta, so_por_baixo,
+                            "%s de %s encosta em %s.%s pelo lado de cima"
+                            % (seg["type"], rota["name"],
+                               *pinos.get(ponta, ("?", "?"))))
+
     def test_pino_de_capacitor_e_de_ci_nao_aceita_solda_por_cima(self):
         """A ceramica fica SOBRE os terminais; o socket do CI, idem.
 
@@ -529,6 +1094,44 @@ class TestIntegridade(unittest.TestCase):
                              "placer relatou %r sobreposicoes e a verificacao achou %d"
                              % (relatado, reais))
 
+    def test_espalhar_as_pecas_vale_no_motor_que_esta_rodando(self):
+        """Sobra de placa nao economiza nada: se ha espaco, ele tem que ser usado.
+
+        Minimizar comprimento de fio, sozinho, junta tudo num canto - e numa
+        perfboard isso e o pior resultado possivel, porque a placa ja foi cortada
+        nesse tamanho e o aperto so atrapalha o ferro, a trilha de cima e a via.
+
+        Regressao dupla, e a segunda e a que doi: o custo de amontoar nasceu so no
+        Python, mas quem posiciona de verdade e o nucleo C. O termo existia, estava
+        no codigo, aparecia na revisao - e nao fazia absolutamente nada. Este teste
+        mede o resultado pelo motor que estiver ativo, seja qual for.
+        """
+        import perfboard.placer as placer
+
+        COLS, ROWS = 30, 24
+
+        def regioes_usadas(peso, seed):
+            placer.W_DENSIDADE = peso
+            res = self.solve_case(board={"cols": COLS, "rows": ROWS},
+                                  placer={"effort": "normal", "seed": seed})
+            return len({(min(2, p["col"] * 3 // COLS), min(2, p["row"] * 3 // ROWS))
+                        for p in res["layout"]["pins"]})
+
+        antes = placer.W_DENSIDADE
+        try:
+            # peso alto de proposito: aqui se mede se o termo CHEGA no motor, nao
+            # a calibragem fina, que e escolhida contra placas reais
+            amontoado = sum(regioes_usadas(0.0, s) for s in (1, 2, 3))
+            espalhado = sum(regioes_usadas(40.0, s) for s in (1, 2, 3))
+        finally:
+            placer.W_DENSIDADE = antes
+
+        self.assertGreater(
+            espalhado, amontoado,
+            "o custo de amontoar nao mudou nada: %d regioes ocupadas com peso alto "
+            "contra %d sem peso nenhum - provavelmente o motor em uso ignora o termo"
+            % (espalhado, amontoado))
+
     def test_corpo_maior_que_os_pinos_e_respeitado(self):
         """Aumentar o corpo tem que mudar o desenho e a colisao, sem mexer nos pinos."""
         pequeno = self.solve_case()
@@ -586,14 +1189,20 @@ class TestIntegridade(unittest.TestCase):
             self.assertEqual(max(x for x, _y in d.pins.values()), 1,
                              "%s foi alargado sem precisar" % fp)
 
-    def test_passo_aberto_e_avisado(self):
-        """Mudar a peca do usuario em silencio nao vale: ele precisa saber e poder
-        discordar pelo editor da lista de componentes."""
+    def test_passo_aberto_fica_na_nota_da_peca_nao_no_painel(self):
+        """Mudar a peca em silencio nao vale - mas quinze avisos iguais tambem nao.
+
+        Abrir o passo e o PADRAO da peca axial: acontece com todo resistor da
+        placa. Como aviso, enchia o painel e escondia o que importa de verdade;
+        como nota da peca, quem abre o editor dela le - e so quem se interessou.
+        """
         from perfboard.footprints import infer
 
         d = infer("Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",
                   ["1", "2"], "R1")
-        self.assertTrue(any("passo aberto" in w for w in d.warnings), d.warnings)
+        self.assertEqual(d.warnings, [], "isto nao e aviso, e comportamento padrao")
+        self.assertIn("passo aberto", d.pin_note)
+        self.assertEqual(max(x for x, _ in d.pins.values()), 4)
 
     def _furos(self, res, ref):
         return sorted((p["pin"], p["col"], p["row"])

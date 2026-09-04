@@ -29,14 +29,22 @@ TIPOS = {0: "start", 1: "trace", 2: "trace_top", 3: "jumper", 4: "via", 5: "lead
 ABI_ESPERADA = 3
 
 
+# Versao da configuracao do posicionador em C. Sobe sempre que PbPlaceCfg muda:
+# uma DLL de outra versao leria os campos trocados, e o resultado seria plausivel
+# e errado. Na divergencia, o Python assume sozinho.
+PLACE_ABI = 2
+
+
 class PbPlaceCfg(ctypes.Structure):
     _fields_ = [
         ("w_overlap_final", ctypes.c_double), ("w_overlap_inicial", ctypes.c_double),
         ("w_outside", ctypes.c_double), ("w_corpo_fora", ctypes.c_double),
         ("w_desacopla", ctypes.c_double), ("edge_pull", ctypes.c_double),
+        ("w_densidade", ctypes.c_double),
         ("sem_saida_0", ctypes.c_double), ("sem_saida_1", ctypes.c_double),
         ("sem_saida_2", ctypes.c_double),
-        ("folga_desacopla", ctypes.c_int), ("proibir_sobreposicao", ctypes.c_int),
+        ("folga_desacopla", ctypes.c_int), ("regioes", ctypes.c_int),
+        ("proibir_sobreposicao", ctypes.c_int),
         ("passos", ctypes.c_int),
         ("semente", ctypes.c_ulonglong),
     ]
@@ -94,7 +102,9 @@ def _carrega():
             # sem `pb_place` continua servindo para o A*
             try:
                 lib.pb_place_versao.restype = ctypes.c_int
-                if lib.pb_place_versao() == 1:
+                # a versao tem que bater exatamente: a configuracao passa como
+                # struct, entao DLL de outra versao leria os campos errados
+                if lib.pb_place_versao() == PLACE_ABI:
                     P = ctypes.POINTER
                     lib.pb_place.restype = ctypes.c_int
                     lib.pb_place.argtypes = [
@@ -391,6 +401,7 @@ def posiciona(estado, passos, semente, pesos):
         w_overlap_inicial=pesos["overlap_inicial"],
         w_outside=pesos["outside"], w_corpo_fora=pesos["corpo_fora"],
         w_desacopla=pesos["desacopla"], edge_pull=estado.edge_pull,
+        w_densidade=pesos["densidade"], regioes=pesos["regioes"],
         sem_saida_0=pesos["sem_saida"][0], sem_saida_1=pesos["sem_saida"][1],
         sem_saida_2=pesos["sem_saida"][2],
         folga_desacopla=pesos["folga_desacopla"],

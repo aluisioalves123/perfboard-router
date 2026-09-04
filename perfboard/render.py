@@ -107,14 +107,12 @@ def _hole_grid(sv):
 
 
 def _draw_segments(sv, routes, kind, opacity, width_mul, dashed=False):
-    """Desenha as trilhas no vocabulario da bancada.
+    """Desenha um tipo de segmento cru do roteador (jumper, via).
 
-    Fio reto sai como linha com solda nas pontas; furos vizinhos saem como capsula
-    de estanho, sem fio; e todo furo onde dois trechos se encontram ganha o anel de
-    junta. Ver isso no desenho e o que evita a pessoa tentar dobrar um fio numa
-    quina que, na verdade, e um ponto de solda.
+    Fio e ponte de solda NAO saem daqui: eles vem do plano de montagem, porque o
+    roteador nao sabe onde a ponta de um fio termina e o estanho comeca.
     """
-    out, alerta, solda = [], [], []
+    out, alerta = [], []
     for r in routes:
         col = net_color(r["name"])
         incompleta = not r.get("ok", True)
@@ -124,41 +122,95 @@ def _draw_segments(sv, routes, kind, opacity, width_mul, dashed=False):
             a, b = seg["from"], seg["to"]
             dash = ' stroke-dasharray="5 4"' if dashed else ""
             titulo = r["name"] + (" - REDE INCOMPLETA" if incompleta else "")
-            vao = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
-            if vao <= 1 and kind in ("trace", "trace_top"):
-                # Furos vizinhos: nao leva fio, leva estanho. Capsula grossa e curta.
-                out.append(
-                    '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" '
-                    'stroke-width="%.1f" stroke-linecap="round" opacity="%.2f"%s>'
-                    '<title>%s - ponte de solda (furos vizinhos, sem fio)</title></line>'
-                    % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), col,
-                       sv.s * width_mul * 2.1, opacity * 0.85, dash, html.escape(titulo))
-                )
-                continue
-
             out.append(
                 '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="%.1f" '
                 'stroke-linecap="round" opacity="%.2f"%s><title>%s</title></line>'
                 % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), col,
                    sv.s * width_mul, opacity, dash, html.escape(titulo))
             )
-            if kind in ("trace", "trace_top"):
-                # ponta de fio = ponto de solda
-                for ponta in (a, b):
-                    solda.append(
-                        '<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" opacity="%.2f">'
-                        '<title>%s - solda na ponta do fio</title></circle>'
-                        % (sv.x(ponta[0]), sv.y(ponta[1]), sv.s * 0.13, col, opacity,
-                           html.escape(titulo))
-                    )
             if incompleta:
-                # casca vermelha tracejada: pedaco de uma rede que nao fechou
                 alerta.append(
                     '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" '
                     'stroke-width="%.1f" stroke-dasharray="3 5" opacity="0.9" '
                     'pointer-events="none"/>'
                     % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), FAIL_COLOR,
                        max(1.6, sv.s * width_mul * 0.45))
+                )
+    sv.add("\n".join(out + alerta))
+
+
+def _draw_bancada(sv, plano, face, opacity, width_mul, dashed=False):
+    """Fio e ponte de solda, direto do plano de montagem.
+
+    Sao desenhos distintos de proposito, porque sao trabalhos distintos:
+
+    * ponte - traco curto e GROSSO, sem bolinhas. Dois furos vizinhos ligados so
+      com estanho; nao leva fio nenhum.
+    * fio reto - linha fina com uma bolinha em cada ponta. A linha e o fio; as
+      bolinhas sao onde o ferro encosta.
+    """
+    if not plano:
+        return
+    out, solda, alerta = [], [], []
+    dash = ' stroke-dasharray="5 4"' if dashed else ""
+
+    for tipo in ("pontes", "fios"):
+        for x in plano.get(tipo, ()):
+            if x["face"] != face:
+                continue
+            a, b = x["de"], x["ate"]
+            col = net_color(x["net"])
+            incompleta = not x.get("ok", True)
+            titulo = "%s - %s de %s a %s%s" % (
+                x["net"],
+                "ponte de solda (furos vizinhos, sem fio)" if tipo == "pontes"
+                else "fio reto de %.1f mm" % x["mm"],
+                x["de_label"], x["ate_label"],
+                " - REDE INCOMPLETA" if incompleta else "")
+            # Solda e fio precisam ser DISTINGUIVEIS de longe, nao so diferentes.
+            # Duas pontes lado a lado formam uma linha continua e ficavam iguais a
+            # um fio - foi assim que uma junta em T correta pareceu tres fios.
+            #
+            # Ponte: cordao gordo e arredondado, com brilho claro no meio, do jeito
+            # que estanho escorrido parece. Fio: linha fina e limpa, com a solda
+            # marcada so nas pontas.
+            if tipo == "pontes":
+                largura = sv.s * width_mul * 3.2
+                out.append(
+                    '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" '
+                    'stroke-width="%.1f" stroke-linecap="round" opacity="%.2f"%s>'
+                    '<title>%s</title></line>'
+                    % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), col,
+                       largura, opacity * 0.9, dash, html.escape(titulo))
+                )
+                out.append(
+                    '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#fff" '
+                    'stroke-width="%.1f" stroke-linecap="round" opacity="%.2f" '
+                    'pointer-events="none"/>'
+                    % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]),
+                       max(0.8, largura * 0.22), opacity * 0.45)
+                )
+                continue
+
+            largura = sv.s * width_mul * 0.78
+            out.append(
+                '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" '
+                'stroke-width="%.1f" stroke-linecap="round" opacity="%.2f"%s>'
+                '<title>%s</title></line>'
+                % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), col,
+                   largura, opacity, dash, html.escape(titulo))
+            )
+            # Ponta de fio NAO ganha marcador proprio. Depois das regras da
+            # bancada ela sempre cai onde ja ha solda desenhada: uma ponte, uma
+            # junta, ou uma travessia para o outro lado. Marcar de novo era inventar
+            # um terceiro tipo de ponto que nao existe na montagem.
+            if incompleta:
+                alerta.append(
+                    '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" '
+                    'stroke-width="%.1f" stroke-dasharray="3 5" opacity="0.9" '
+                    'pointer-events="none"/>'
+                    % (sv.x(a[0]), sv.y(a[1]), sv.x(b[0]), sv.y(b[1]), FAIL_COLOR,
+                       max(1.6, largura * 0.45))
                 )
     sv.add("\n".join(out + solda + alerta))
 
@@ -296,18 +348,18 @@ def render_board(layout, routes, side: str = "top", scale: float = 26.0,
 
     if side == "top":
         # trilhas do lado da solda ficam por baixo: aparecem apagadas, so como referencia
-        _draw_segments(sv, routes, "trace", 0.26, 0.16, dashed=True)
+        _draw_bancada(sv, plano, "solda", 0.26, 0.16, dashed=True)
         _draw_components(sv, layout)
-        _draw_segments(sv, routes, "trace_top", 0.95, 0.20)
+        _draw_bancada(sv, plano, "componentes", 0.95, 0.20)
         _draw_segments(sv, routes, "jumper", 0.95, 0.13)
         if plano:
             _draw_juntas(sv, plano, "componentes")
         _draw_vias(sv, routes)
     else:
         _draw_components(sv, layout, faded=True)
-        _draw_segments(sv, routes, "trace_top", 0.24, 0.12, dashed=True)
+        _draw_bancada(sv, plano, "componentes", 0.24, 0.12, dashed=True)
         _draw_segments(sv, routes, "jumper", 0.20, 0.10, dashed=True)
-        _draw_segments(sv, routes, "trace", 0.95, 0.20)
+        _draw_bancada(sv, plano, "solda", 0.95, 0.20)
         if plano:
             _draw_juntas(sv, plano, "solda")
         _draw_vias(sv, routes, faded=True)

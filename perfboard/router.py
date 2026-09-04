@@ -596,11 +596,18 @@ class Router:
             """Marca um no como conectado.
 
             Entra sempre com direcao LIVRE: de uma junta ja soldada da para sair
-            para qualquer lado sem que isso conte como dobra. Em furo de terminal,
-            o proprio terminal ja liga as duas faces, entao as duas entram.
+            para qualquer lado sem que isso conte como dobra.
+
+            Em furo de terminal o proprio terminal costuma ligar as duas faces - mas
+            SO se der para soldar em cima. No pino de um capacitor o corpo esta sobre
+            o furo, e no de um CI ha o socket: la o terminal e soldado apenas por
+            baixo, e a ilha de cima nao esta ligada a nada. Sem esta ressalva o A*
+            entra pelo lado de cima desses pinos, que e por onde o bug escapava.
             """
             cell = (node[0], node[1])
-            faces = (BOTTOM, TOP) if self.pin_net.get(cell) == name else (node[2],)
+            liga_as_duas = (self.pin_net.get(cell) == name
+                            and cell not in self.pinos_so_por_baixo)
+            faces = (BOTTOM, TOP) if liga_as_duas else (node[2],)
             for face in faces:
                 tree.add((cell[0], cell[1], face, LIVRE))
                 k = (cell[0], cell[1], face)
@@ -827,8 +834,13 @@ class Router:
         pins = list(self.pin_cells.get(route.name, []))
         if len(pins) < 2:
             return
-        # o terminal do componente atravessa o furo e liga as duas faces
+        # O terminal atravessa o furo e liga as duas faces - menos quando so da para
+        # solda-lo por baixo (capacitor, CI em socket). Ali a ilha de cima fica solta,
+        # e a auditoria tem de enxergar isso: senao ela declara ligada uma rede que
+        # so fecha por um caminho que ninguem consegue soldar.
         for cell in pins:
+            if cell in self.pinos_so_por_baixo:
+                continue
             liga((cell[0], cell[1], BOTTOM), (cell[0], cell[1], TOP))
 
         inicio = (pins[0][0], pins[0][1], BOTTOM)

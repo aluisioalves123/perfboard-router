@@ -38,6 +38,9 @@ class FootprintDef:
     # Atrapalha soldar num furo vizinho, pelo lado de cima? Resistor nao; capacitor,
     # conector e CI (que vai em socket) sim.
     estorva: bool = True
+    # ordem de montagem: peca baixa entra primeiro, senao a placa nao assenta
+    altura: int = 4
+    altura_motivo: str = ""
 
     @property
     def extent(self):
@@ -80,6 +83,8 @@ class FootprintDef:
             "body_note": self.body_note,
             "pin_note": self.pin_note,
             "estorva_solda": self.estorva,
+            "altura": self.altura,
+            "altura_motivo": self.altura_motivo,
             "arranjo": arranjo_dos_pinos(self.pins),
         }
 
@@ -117,6 +122,31 @@ AXIAIS = ("R_Axial", "C_Axial", "L_Axial", "D_DO", "D_A-405", "Varistor")
 # socket nao se solda nada.
 NAO_ESTORVAM_SOLDA = ("R_Axial", "R_Box", "R_Bare", "L_Axial", "D_DO", "D_A-405",
                       "TO-92", "TO92", "TO-226", "TO-18")
+
+
+# Altura de montagem, para ordenar o roteiro. Nao e medida em mm: e a ordem em que
+# as pecas entram na placa. Voce vira a placa para soldar, e ela precisa assentar -
+# com um borne alto ja montado, as pecas baixas caem do outro lado.
+ALTURA = (
+    (("R_Axial", "R_Box", "R_Bare", "L_Axial", "D_DO", "D_A-405"), 0, "deitado na placa"),
+    (("TO-92", "TO92", "TO-226", "TO-18"), 2, "pequeno, em pe"),
+    (("DIP-", "SOIC", "DIP_"), 3, "CI ou socket"),
+    (("LED_D", "LED_"), 3, "LED em pe"),
+    (("C_Disc", "C_Rect", "C_Axial"), 4, "capacitor de disco"),
+    (("CP_Radial", "C_Radial", "CP_Elec"), 5, "eletrolitico"),
+    (("TO-220", "TO-126", "SOT-223"), 6, "com aba ou dissipador"),
+    (("PinHeader", "Potentiometer", "Trimmer"), 7, "barra de pinos ou trimpot"),
+    (("TerminalBlock", "Screw_Terminal"), 8, "borne, o mais alto"),
+)
+
+
+def altura_montagem(footprint: str):
+    """(ordem, motivo) para montar do mais baixo ao mais alto."""
+    nome = footprint or ""
+    for chaves, ordem, motivo in ALTURA:
+        if any(k in nome for k in chaves):
+            return ordem, motivo
+    return 4, "altura desconhecida"
 
 
 def estorva_solda(ref: str, footprint: str) -> bool:
@@ -309,10 +339,12 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "") -> FootprintDef:
         if any(k in name for k in AXIAIS):
             aberto = _passo_axial(name, step)
             if aberto != step:
-                d.warnings.append(
-                    "passo aberto de %d para %d furos: peca axial precisa de espaco para "
-                    "dobrar o terminal. Ajuste no botao da lista se a sua for diferente."
-                    % (step, aberto))
+                # Isto NAO e aviso: e o padrao da peca axial, e vale para todo
+                # resistor da placa. Como aviso, virava quinze linhas iguais no
+                # painel escondendo o que importa. Fica na nota da peca, que quem
+                # abrir o editor dela le - e so quem se interessou.
+                d.pin_note = ("passo aberto de %d para %d furos (%.1f mm) para caber "
+                              "a dobra do terminal" % (step, aberto, aberto * PITCH_MM))
                 step = aberto
         d.pins = {pins[0]: (0, 0), pins[1]: (step, 0)}
         d.label = "2 terminais, passo %d furo(s)" % step
@@ -514,5 +546,6 @@ def build_library(netlist, overrides=None) -> dict:
     for ref, comp in netlist.components.items():
         d = infer(comp.footprint, comp.pins, ref)
         d.estorva = estorva_solda(ref, comp.footprint)
+        d.altura, d.altura_motivo = altura_montagem(comp.footprint)
         lib[ref] = aplica_override(d, overrides.get(ref))
     return lib

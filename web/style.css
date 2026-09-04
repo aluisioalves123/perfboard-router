@@ -161,6 +161,21 @@ button.ghost { background: transparent; font-size: 12.5px; padding: 5px 9px; }
 .overlay-curva { width: 240px; height: 54px; }
 .overlay-curva:empty { display: none; }
 .curva-svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* Roteiro de montagem: um passo por vez, com caixinha para marcar o que ja foi. */
+.passo { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 7px 0;
+         border-top: 1px solid var(--line); font-size: 12px; }
+.passo:first-child { border-top: 0; }
+.passo .n { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 11px;
+            padding-top: 2px; }
+.passo .titulo { color: var(--text); font-weight: 600; }
+.passo .detalhe { color: var(--dim); font-size: 11.5px; line-height: 1.45; margin-top: 2px; }
+.passo ul { margin: 4px 0 0; padding-left: 16px; color: var(--dim); font-size: 11.5px; }
+.passo.feito .titulo, .passo.feito .detalhe, .passo.feito ul { opacity: .4;
+            text-decoration: line-through; }
+.passo-grupo { margin: 14px 0 2px; font-size: 11px; text-transform: uppercase;
+               letter-spacing: .08em; color: var(--accent2); font-weight: 600; }
+.passo-grupo:first-child { margin-top: 0; }
 .overlay-tempo { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
 #overlayParar { margin-top: 4px; }
 

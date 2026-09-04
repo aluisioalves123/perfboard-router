@@ -45,6 +45,16 @@ FOLGA_DESACOPLA = 1   # ficar a 1 furo ja e o ideal pratico; nao adianta cobrar 
 DIRS4 = ((1, 0), (-1, 0), (0, 1), (0, -1))
 W_SEM_SAIDA = {0: 90.0, 1: 14.0, 2: 3.0}
 
+# Quanto custa amontoar. A placa e dividida em regioes; cada furo de peca acima da
+# media de ocupacao de uma regiao paga este peso ao quadrado da diferenca.
+#
+# Existe porque minimizar fio, sozinho, junta tudo num canto: sobra metade da placa
+# vazia e a outra metade fica sem espaco para o ferro, para a trilha de cima nem
+# para a via. Em perfboard sobra de area nao economiza nada - a placa ja foi
+# cortada nesse tamanho.
+W_DENSIDADE = 0.9
+REGIOES = 3        # divide a placa em 3x3; fino demais viraria ruido
+
 
 def _fp_span(fp, rot):
     cells = [rotate(dx, dy, rot) for dx, dy in fp.pins.values()]
@@ -142,6 +152,10 @@ class _State:
         self.tot_corpo_fora = 0
         self.tot_edge = 0.0
         self.edge = {}          # ref -> custo de borda
+        # ocupacao por regiao da placa, para nao amontoar tudo num canto
+        self.regiao_de = {}     # ref -> indice da regiao
+        self.area_de = {}       # ref -> area do corpo, para tirar da regiao antiga
+        self.dens = [0.0] * (REGIOES * REGIOES)
         self.net_cost = [0.0] * len(self.nets)
         # peso corrente da sobreposicao; sobe ao longo do recozimento
         self.w_overlap = W_OVERLAP
@@ -217,6 +231,20 @@ class _State:
         self.tot_corpo_fora += fora_corpo - self.corpo_fora.get(ref, 0)
         self.outside[ref] = fora_pinos
         self.corpo_fora[ref] = fora_corpo
+
+        # densidade: a peca conta na regiao onde esta o centro dela
+        cx_d = (cx0 + cx1) / 2.0
+        cy_d = (cy0 + cy1) / 2.0
+        col = min(REGIOES - 1, max(0, int(cx_d * REGIOES / max(1, self.spec.cols))))
+        lin = min(REGIOES - 1, max(0, int(cy_d * REGIOES / max(1, self.spec.rows))))
+        nova_regiao = lin * REGIOES + col
+        antiga = self.regiao_de.get(ref)
+        area = float((cx1 - cx0 + 1) * (cy1 - cy0 + 1))
+        if antiga is not None:
+            self.dens[antiga] -= self.area_de.get(ref, 0.0)
+        self.dens[nova_regiao] += area
+        self.regiao_de[ref] = nova_regiao
+        self.area_de[ref] = area
 
         if self.edge_pull and self.is_edge[ref]:
             x0, y0, x1, y1 = self.spec.usable_bounds()
@@ -339,7 +367,20 @@ class _State:
                 + W_CORPO_FORA * sum(self.corpo_fora.values())
                 + self.trapped
                 + self.laco
+                + self.desequilibrio
                 + sum(self.edge.values()))
+
+    @property
+    def desequilibrio(self):
+        """Quanto a ocupacao esta desigual entre as regioes da placa.
+
+        Zero quando as pecas estao espalhadas por igual. Cresce com o quadrado da
+        diferenca, entao um canto muito carregado pesa bem mais que varios um pouco
+        acima da media - que e o comportamento que se quer.
+        """
+        n = len(self.dens)
+        media = sum(self.dens) / n if n else 0.0
+        return W_DENSIDADE * sum((d - media) ** 2 for d in self.dens) / n
 
     def estrito_de(self, custo_corrente):
         """Converte um custo ja calculado para o peso final de sobreposicao.
@@ -431,6 +472,7 @@ def auto_place(layout: Layout, netlist, *, seed: int = 1, effort: str = "normal"
             "outside": W_OUTSIDE, "corpo_fora": W_CORPO_FORA,
             "desacopla": W_DESACOPLA, "folga_desacopla": FOLGA_DESACOPLA,
             "sem_saida": (W_SEM_SAIDA[0], W_SEM_SAIDA[1], W_SEM_SAIDA[2]),
+            "densidade": W_DENSIDADE, "regioes": REGIOES,
         }
         if nativo.posiciona(st, steps, seed, pesos):
             final = _State(layout, netlist, edge_pull=edge_pull, decoupling=decoupling,

@@ -255,6 +255,12 @@ Sobreposição de corpos é **proibida**, não cara: na prática é impossível 
 começa frouxa e endurece ao longo do recozimento — proibir desde o primeiro passo transforma a
 restrição num muro que impede a busca de atravessar o terreno ruim até o terreno bom.
 
+**Espalhar também é objetivo.** Minimizar comprimento de fio, sozinho, junta tudo num canto — e
+numa perfboard esse é o pior resultado possível: a placa já foi cortada nesse tamanho, então sobra
+de área não economiza nada e só tira espaço do ferro, da trilha de cima e da via. A placa é dividida
+em regiões 3×3 e o custo cresce com o **quadrado** do desequilíbrio de ocupação entre elas, o que
+faz uma região lotada ao lado de uma vazia pesar muito mais que várias um pouco acima da média.
+
 **Capacitor de desacoplamento** pode ser vinculado ao CI que ele protege. O posicionador minimiza a
 área do laço entre o pino de alimentação do CI e o capacitor, sem deixar um por cima do outro.
 

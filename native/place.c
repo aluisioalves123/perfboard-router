@@ -30,8 +30,10 @@ typedef struct {
     double w_overlap_final, w_overlap_inicial;
     double w_outside, w_corpo_fora, w_desacopla;
     double edge_pull;
+    double w_densidade;         /* custo de amontoar; 0 desliga */
     double sem_saida_0, sem_saida_1, sem_saida_2;   /* penalidade por 0,1,2 saidas */
     int folga_desacopla;
+    int regioes;                /* divide a placa em regioes x regioes */
     int proibir_sobreposicao;   /* 1 = movimento que sobrepoe e recusado na hora */
     int passos;
     unsigned long long semente;
@@ -67,6 +69,12 @@ typedef struct {
     double *custo_net, *custo_par, *pen;
     int *fora_pino, *fora_corpo;
     double *custo_borda;
+
+    /* ocupacao por regiao da placa, para nao empilhar tudo num canto */
+    int n_reg, reg_lado;
+    double *dens;               /* area de peca em cada regiao */
+    double *area_de;            /* area do corpo de cada peca */
+    int *reg_de;                /* regiao de cada peca, -1 se ainda nao entrou */
 
     double fio, laco, trancado, w_overlap;
     int overlap, tot_fora_pino, tot_fora_corpo;
@@ -237,6 +245,22 @@ static void instala(PbEstado *e, int p) {
     e->tot_fora_corpo += fora_c - e->fora_corpo[p];
     e->fora_corpo[p] = fora_c;
 
+    if (e->n_reg > 1) {
+        double mx = (cx0 + cx1) / 2.0, my = (cy0 + cy1) / 2.0;
+        int rc = (int)(mx * e->reg_lado / (e->cols > 0 ? e->cols : 1));
+        int rl = (int)(my * e->reg_lado / (e->rows > 0 ? e->rows : 1));
+        if (rc < 0) rc = 0;
+        if (rc >= e->reg_lado) rc = e->reg_lado - 1;
+        if (rl < 0) rl = 0;
+        if (rl >= e->reg_lado) rl = e->reg_lado - 1;
+        int nova = rl * e->reg_lado + rc;
+        double area = (double)(cx1 - cx0 + 1) * (double)(cy1 - cy0 + 1);
+        if (e->reg_de[p] >= 0) e->dens[e->reg_de[p]] -= e->area_de[p];
+        e->dens[nova] += area;
+        e->reg_de[p] = nova;
+        e->area_de[p] = area;
+    }
+
     double nb = 0.0;
     if (e->cfg->edge_pull > 0.0 && e->borda[p]) {
         double ccx = (cx0 + cx1) / 2.0, ccy = (cy0 + cy1) / 2.0;
@@ -274,6 +298,25 @@ static double calc_par(const PbEstado *e, int i) {
     return d > 0 ? e->cfg->w_desacopla * d : 0.0;
 }
 
+/* Quanto a ocupacao esta desigual entre as regioes da placa.
+
+   Zero quando as pecas estao espalhadas por igual. Cresce com o QUADRADO da
+   diferenca, entao uma regiao lotada ao lado de uma vazia pesa bem mais que
+   varias um pouco acima da media - que e exatamente o que se quer evitar numa
+   perfboard pequena, onde area sobrando nao economiza nada e so aperta a
+   montagem. Sao poucas regioes, entao recalcular inteiro a cada custo e barato. */
+static double desequilibrio(const PbEstado *e) {
+    if (e->cfg->w_densidade <= 0.0 || e->n_reg <= 1) return 0.0;
+    double soma = 0.0;
+    for (int i = 0; i < e->n_reg; i++) soma += e->dens[i];
+    double media = soma / e->n_reg, acc = 0.0;
+    for (int i = 0; i < e->n_reg; i++) {
+        double d = e->dens[i] - media;
+        acc += d * d;
+    }
+    return e->cfg->w_densidade * acc / e->n_reg;
+}
+
 static double custo(const PbEstado *e) {
     return e->fio
          + e->w_overlap * (double)e->overlap
@@ -281,6 +324,7 @@ static double custo(const PbEstado *e) {
          + e->cfg->w_corpo_fora * (double)e->tot_fora_corpo
          + e->trancado
          + e->laco
+         + desequilibrio(e)
          + e->tot_borda;
 }
 
@@ -327,6 +371,12 @@ PB_EXPORT int pb_place(const PbPlaceCfg *cfg,
     e.fora_pino = (int *)calloc(n_comp, sizeof(int));
     e.fora_corpo = (int *)calloc(n_comp, sizeof(int));
     e.custo_borda = (double *)calloc(n_comp, sizeof(double));
+    e.reg_lado = cfg->regioes > 1 ? cfg->regioes : 1;
+    e.n_reg = e.reg_lado * e.reg_lado;
+    e.dens = (double *)calloc(e.n_reg, sizeof(double));
+    e.area_de = (double *)calloc(n_comp > 0 ? n_comp : 1, sizeof(double));
+    e.reg_de = (int *)malloc(sizeof(int) * (n_comp > 0 ? n_comp : 1));
+    if (e.reg_de) for (int i = 0; i < n_comp; i++) e.reg_de[i] = -1;
     int *moveis = (int *)malloc(sizeof(int) * (n_comp > 0 ? n_comp : 1));
     int *melhor_col = (int *)malloc(sizeof(int) * n_comp);
     int *melhor_row = (int *)malloc(sizeof(int) * n_comp);
@@ -334,11 +384,13 @@ PB_EXPORT int pb_place(const PbPlaceCfg *cfg,
     int *afetadas = (int *)malloc(sizeof(int) * 130 * 5);
 
     if (!e.pc_x || !e.pc_y || !e.occ || !e.rede_da_celula || !e.dono_da_celula ||
-        !e.pen || !e.cx0 || !e.custo_net || !moveis || !melhor_col || !afetadas) {
+        !e.pen || !e.cx0 || !e.custo_net || !moveis || !melhor_col || !afetadas ||
+        !e.dens || !e.area_de || !e.reg_de) {
         free(e.pc_x); free(e.pc_y); free(e.occ); free(e.rede_da_celula);
         free(e.dono_da_celula); free(e.pen); free(e.cx0); free(e.cy0);
         free(e.cx1); free(e.cy1); free(e.custo_net); free(e.custo_par);
         free(e.fora_pino); free(e.fora_corpo); free(e.custo_borda);
+        free(e.dens); free(e.area_de); free(e.reg_de);
         free(moveis); free(melhor_col); free(melhor_row); free(melhor_rot);
         free(afetadas);
         return -2;
@@ -361,6 +413,7 @@ PB_EXPORT int pb_place(const PbPlaceCfg *cfg,
         free(e.dono_da_celula); free(e.pen); free(e.cx0); free(e.cy0);
         free(e.cx1); free(e.cy1); free(e.custo_net); free(e.custo_par);
         free(e.fora_pino); free(e.fora_corpo); free(e.custo_borda);
+        free(e.dens); free(e.area_de); free(e.reg_de);
         free(moveis); free(melhor_col); free(melhor_row); free(melhor_rot);
         free(afetadas);
         return 0;
@@ -530,12 +583,15 @@ PB_EXPORT int pb_place(const PbPlaceCfg *cfg,
     free(e.dono_da_celula); free(e.pen); free(e.cx0); free(e.cy0);
     free(e.cx1); free(e.cy1); free(e.custo_net); free(e.custo_par);
     free(e.fora_pino); free(e.fora_corpo); free(e.custo_borda);
+    free(e.dens); free(e.area_de); free(e.reg_de);
     free(moveis); free(melhor_col); free(melhor_row); free(melhor_rot);
     free(afetadas);
     return 1;
 }
 
-PB_EXPORT int pb_place_versao(void) { return 1; }
+/* 2: a configuracao ganhou w_densidade e regioes. O Python confere este numero
+   antes de chamar, entao uma DLL antiga simplesmente nao e usada. */
+PB_EXPORT int pb_place_versao(void) { return 2; }
 
 /* Exposto so para o teste de regressao comparar com board.rotate() do Python. */
 PB_EXPORT void pb_gira(int dx, int dy, int rot, int *ox, int *oy) {

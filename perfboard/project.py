@@ -6,6 +6,7 @@ import time
 
 from . import bancada
 from . import footprints as fpmod
+from . import manual
 from . import paralelo
 from . import render
 from .board import BoardSpec, Layout, Placement, PITCH_MM, rotulador
@@ -554,7 +555,16 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
     hole_nets = result["occupancy"]["holes"]
     # Um plano so, usado pelo desenho E pelo guia: assim nao ha como um dizer 13
     # juntas e o outro 14.
-    plano_bancada = bancada.plano_de_montagem(result["routes"], nome_do_furo)
+    pinos_da_placa = {}
+    for ref in layout.placements:
+        for pino, cel in layout.pin_holes(ref).items():
+            pinos_da_placa[tuple(cel)] = (ref, pino)
+    plano_bancada = bancada.plano_de_montagem(result["routes"], nome_do_furo,
+                                              pinos_da_placa)
+    # O programa confere a propria saida contra as regras da bancada. Achar isso a
+    # olho, no desenho, e trabalho de quem monta - e ele ja tem trabalho demais.
+    problemas_de_montagem = bancada.confere(plano_bancada, pinos_da_placa,
+                                            result["routes"])
     svg_top = render.render_board(layout, result["routes"], "top", scale, hole_nets,
                                   label_style=style, plano=plano_bancada)
     svg_bottom = render.render_board(layout, result["routes"], "bottom", scale, hole_nets,
@@ -680,6 +690,7 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
         "stats": result["stats"],
         "shorts": result["shorts"],
         "problems": layout.problems(),
+        "montagem_problemas": problemas_de_montagem,
         "warnings": fp_warnings,
         "placement": place_report,
         "svg_top": svg_top,
@@ -689,12 +700,12 @@ def solve(payload: dict, progresso=None, cancelado=None) -> dict:
         "jumper_limit": relato_jumpers,
         "historico": historico,
         "suggestion": suggestion,
-        "build": build_instructions(layout, result, style, plano_bancada),
+        "build": build_instructions(layout, result, style, plano_bancada, nl),
     }
 
 
 def build_instructions(layout: Layout, result: dict, style: str = "letra",
-                       plano=None) -> dict:
+                       plano=None, netlist=None) -> dict:
     """Roteiro de montagem: onde por cada peca, que fios, pontes e juntas fazer."""
     nome_do_furo = rotulador(layout.spec, style)
     comps = []
@@ -749,11 +760,19 @@ def build_instructions(layout: Layout, result: dict, style: str = "letra",
     # da lista de passos do roteador. Vem pronto de quem desenhou, para desenho e
     # texto contarem a mesma historia.
     if plano is None:
-        plano = bancada.plano_de_montagem(result["routes"], nome_do_furo)
+        pinos_da_placa = {}
+        for ref in layout.placements:
+            for pino, cel in layout.pin_holes(ref).items():
+                pinos_da_placa[tuple(cel)] = (ref, pino)
+        plano = bancada.plano_de_montagem(result["routes"], nome_do_furo,
+                                          pinos_da_placa)
 
     return {
         "components": comps,
         "bancada": plano,
+        # o que fazer, em que ordem: peca baixa primeiro, depois fiacao rede a rede
+        "roteiro": manual.monta_roteiro(layout, plano, result["routes"], nome_do_furo,
+                                        result.get("stats"), netlist),
         "bridges": bridges,
         "top_bridges": top_bridges,
         "vias": vias,
