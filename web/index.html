@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Perfboard Router</title>
+<!-- Descricao para quando o link e colado num forum ou grupo. -->
+<meta name="description" content="Pega a netlist do KiCad e gera o layout de uma
+  perfboard: posiciona as peças, roteia as duas faces e escreve o guia de montagem
+  em vocabulário de bancada — fio reto, ponte de solda e via. Código aberto.">
+<link rel="canonical" href="https://hardware.aluisiocunha.com.br/perfboard-router/">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,6 +17,8 @@
   <h1>Perfboard Router</h1>
   <span class="sub">KiCad <code>.net</code> &rarr; layout de perfboard com trilhas e jumpers</span>
   <span class="spacer"></span>
+  <a class="repo" href="https://github.com/aluisioalves123/perfboard-router"
+     target="_blank" rel="noopener">código no GitHub</a>
   <span id="status" class="status">carregue uma netlist</span>
 </header>
 
@@ -146,6 +153,23 @@
         <button class="ghost" data-export="json">Projeto (.json)</button>
         <button class="ghost" data-export="txt">Guia de montagem</button>
       </div>
+    </section>
+
+    <section class="projeto">
+      <h2>Rode na sua máquina</h2>
+      <p>Este site é uma VPS pequena e compartilhada. A busca aqui tem um
+        <b>orçamento de 90&nbsp;s</b> e entrega o melhor que achou até ali. Na sua
+        máquina ela roda até <b>estacionar sozinha</b> — centenas de tentativas — e o
+        layout costuma sair bem mais fácil de montar.</p>
+      <p>Precisa só de Python 3. Sem dependência, sem banco, sem conta:</p>
+      <pre><code>git clone https://github.com/aluisioalves123/perfboard-router
+cd perfboard-router
+python server.py</code></pre>
+      <p>O núcleo em C é opcional e deixa o roteamento ~14× mais rápido:
+        <code>cd native &amp;&amp; ./build.sh</code></p>
+      <p class="fim"><a href="https://github.com/aluisioalves123/perfboard-router"
+        target="_blank" rel="noopener">github.com/aluisioalves123/perfboard-router</a>
+        — código aberto, e o README explica as decisões de bancada por trás de cada regra.</p>
     </section>
   </aside>
 

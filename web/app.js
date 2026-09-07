@@ -106,7 +106,13 @@ async function apiFluxo(corpo, aoProgresso) {
       if (!linha) continue;
       let ev;
       try { ev = JSON.parse(linha); } catch (e) { continue; }
-      if (ev.tipo === 'inicio') S.job = ev.job || null;
+      if (ev.tipo === 'inicio') {
+        S.job = ev.job || null;
+        // O servidor rebaixa esforco e tentativas para caber no orcamento dele e
+        // conta o que mexeu aqui. Isso vinha sendo descartado, entao a pessoa
+        // recebia um resultado pior sem nunca saber por que.
+        S.avisosDoServidor = ev.server_notes || [];
+      }
       else if (ev.tipo === 'progresso') aoProgresso(ev);
       else if (ev.tipo === 'final') final = ev.resultado;
       else if (ev.tipo === 'erro') throw new Error(ev.detail || ev.error || 'falha');
@@ -660,6 +666,17 @@ function renderIssues() {
     out.push(`<div class="msg err">Rede <b>${f}</b> não fechou. ${why}</div>`);
   }
   for (const w of r.warnings) out.push(`<div class="msg warn">${w}</div>`);
+  const doServidor = S.avisosDoServidor || [];
+  if (doServidor.length || r.server_notes) {
+    const notas = doServidor.length ? doServidor : (r.server_notes || []);
+    out.push(`<div class="msg warn"><b>Este servidor limitou a busca.</b>
+      <ul>${notas.map((n) => `<li>${n}</li>`).join('')}</ul>
+      É uma VPS pequena e compartilhada: a busca para no orçamento e entrega o melhor
+      que achou até ali. Na sua máquina ela roda até estacionar sozinha e o layout sai
+      bem mais fácil de montar —
+      <a href="https://github.com/aluisioalves123/perfboard-router" target="_blank"
+         rel="noopener">como instalar</a>.</div>`);
+  }
   for (const s of r.stats.skipped) {
     out.push(`<div class="msg warn">Rede ${s} ignorada: menos de 2 pinos posicionados.</div>`);
   }
@@ -1206,6 +1223,10 @@ function buildText() {
 
   risca('');
   risca('='.repeat(60));
+  risca('Perfboard Router — github.com/aluisioalves123/perfboard-router');
+  risca('Rodando na sua maquina a busca vai ate estacionar sozinha, e o layout');
+  risca('costuma sair bem mais facil de montar. Precisa so de Python 3.');
+  risca('');
   risca('Gerado por Perfboard Router. Fio reto, ponte de solda e junta:');
   risca('nao ha nada para dobrar neste manual, e nenhum furo e soldado duas vezes.');
   return L.join('\n');

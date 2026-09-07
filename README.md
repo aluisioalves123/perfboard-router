@@ -6,6 +6,13 @@ as restrições reais de uma placa perfurada de 0,1" (2,54 mm).
 
 Roda 100% local, sem instalar nada além do Python 3.9+.
 
+**Experimentar sem instalar:** [hardware.aluisiocunha.com.br/perfboard-router](https://hardware.aluisiocunha.com.br/perfboard-router/)
+
+Vale saber o que muda entre os dois. A demo é uma VPS pequena e compartilhada: a busca tem
+orçamento de 90 s e entrega o melhor que achou até ali. Na sua máquina ela roda até **estacionar
+sozinha** — costuma passar de centenas de tentativas — e o layout sai bem mais fácil de montar.
+Para a placa que você vai soldar de verdade, rode local.
+
 ---
 
 ## Por que isso é difícil
