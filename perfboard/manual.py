@@ -22,15 +22,28 @@ Entao o roteiro cresce de dentro para fora:
 Entre duas pecas igualmente candidatas, entra a mais baixa: voce vira a placa para
 soldar e ela precisa assentar.
 
-E acima de tudo isso manda uma regra de ferro: **cada furo e soldado uma vez so**.
+E acima de tudo isso manda uma regra de ferro: **cada ilha e soldada uma vez so**.
 Ponte de solda nao e uma operacao separada - e o estanho da propria junta puxado
-ate a ilha vizinha. Mandar fazer a ponte e depois passar um fio pelo mesmo furo
-obriga a reaquecer e limpar o furo: retrabalho puro, e o erro que este modulo
-existe para nao cometer.
+ate a ilha vizinha, e pontes ligadas entre si sao um cordao unico, feito de uma
+vez. Mandar soldar duas vezes o mesmo cobre e retrabalho puro.
+
+ILHA, nao furo: o furo tem duas, uma de cada lado da placa, e sao cobres
+separados. Um fio deitado em cima nao atrapalha nada embaixo. O que atravessa a
+placa - terminal, via, fio de travessia - e que enche o furo e obriga a esperar.
+Confundir as duas coisas gera proibicao inventada, e proibicao inventada custa a
+confianca no manual inteiro.
 """
 from __future__ import annotations
 
 import math
+
+
+CIMA, BAIXO = 1, 0
+
+
+def _face(rotulo):
+    """A face onde a solda e feita, como numero."""
+    return CIMA if rotulo == "componentes" else BAIXO
 
 
 def _chave_ref(ref):
@@ -156,12 +169,18 @@ def _sequencia_de_itens(layout, plano, rotas, ordem, ordem_de, pos_pino):
     feito antes do fio, entao uma ponte ancorada no pino ainda saia antes do fio
     que cai no furo do lado. So a sequencia achatada da a resposta certa.
 
-    Devolve `(tipo, carga, encosta, enfia)`, com `tipo` em "peca", "fio" e "jumper".
-    `encosta` sao todos os furos que o item cobre; `enfia` so os que ele OCUPA - o
-    pino e a ponta de fio entram no furo, o fio de passagem so deita por cima. A
-    diferenca decide quando o furo pode ser soldado: estanho num furo ocupado nao
-    atrapalha ninguem, mas estanho num furo que ainda vai receber um terminal
-    entope o furo e obriga a desfazer a solda.
+    Devolve `(tipo, carga, ilhas, enche)`, com `tipo` em "peca", "via", "fio" e
+    "jumper".
+
+    A distincao que importa e entre ILHA e FURO. O furo tem duas ilhas, uma de cada
+    lado da placa, e elas sao cobres separados: um fio deitado em cima reivindica a
+    ilha de cima e deixa a de baixo livre. So ENCHE o furo o que atravessa a placa -
+    o terminal do componente, a via, e o fio que passa pelo buraco para continuar do
+    outro lado. Estanho num furo que ainda vai receber um desses e furo entupido e
+    solda a desfazer; estanho na ilha oposta nao atrapalha nada.
+
+    `ilhas` e a lista de `(furo, face)` que o item reivindica; `enche`, os furos que
+    ele atravessa.
     """
     fios_de, jumpers_de, vias_de = {}, {}, {}
     for f in plano.get("fios", ()):
@@ -197,19 +216,41 @@ def _sequencia_de_itens(layout, plano, rotas, ordem, ordem_de, pos_pino):
 
     itens = []
     for i, ref in enumerate(ordem):
-        pinos = [tuple(c) for c in layout.pin_holes(ref).values()]
-        itens.append(("peca", (i, ref), pinos, pinos))
+        furos = [tuple(c) for c in layout.pin_holes(ref).values()]
+        # O terminal atravessa a placa, entao enche o furo. A ilha de cima so conta
+        # se o corpo nao estiver por cima dela: sob capacitor ou CI a ceramica tampa
+        # o furo e so a ilha de baixo e soldavel.
+        ilhas = [(f, BAIXO) for f in furos]
+        fp = layout.footprints.get(ref)
+        if fp is not None and not getattr(fp, "estorva", True):
+            ilhas += [(f, CIMA) for f in furos]
+        itens.append(("peca", (i, ref), ilhas, furos))
+
         # a via vem antes de tudo no grupo: nada mais pode ser soldado no furo dela
         # enquanto o toco de fio nao estiver no lugar
         for furo, net in sorted(vias_de.get(i, {}).items()):
-            itens.append(("via", (i, furo, net), [furo], [furo]))
+            itens.append(("via", (i, furo, net),
+                          [(furo, BAIXO), (furo, CIMA)], [furo]))
+
         for f in sorted(fios_de.get(i, ()), key=lambda f: -f["furos"]):
-            pontas = [tuple(f["de"]), tuple(f["ate"])]
-            itens.append(("fio", (i, f), _furos_ocupados(f["de"], f["ate"]), pontas))
+            face = _face(f.get("face"))
+            ilhas = [(h, face) for h in _furos_ocupados(f["de"], f["ate"])]
+            # so a ponta marcada como travessia passa pelo buraco; a outra fica
+            # deitada na ilha e nao atrapalha o outro lado da placa
+            enche = []
+            if f.get("de_atravessa"):
+                enche.append(tuple(f["de"]))
+            if f.get("ate_atravessa"):
+                enche.append(tuple(f["ate"]))
+            itens.append(("fio", (i, f), ilhas, enche))
+
         for nome, seg in sorted(jumpers_de.get(i, ()), key=lambda x: x[1]["length_mm"]):
+            # o jumper e isolado e passa pelo buraco para ser soldado do outro lado:
+            # as duas pontas dele enchem o furo
+            face = CIMA if seg.get("layer") == 1 else BAIXO
             pontas = [tuple(seg["from"]), tuple(seg["to"])]
             itens.append(("jumper", (i, nome, seg),
-                          _furos_ocupados(seg["from"], seg["to"]), pontas))
+                          [(h, face) for h in pontas], pontas))
     return itens
 
 
@@ -230,8 +271,9 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
               "%d peças. A placa é de %d x %d furos. Vamos montar do MEIO para as "
               "bordas: cada peça tira espaço das trilhas de cima e das vias, então "
               "as ligações difíceis se fazem primeiro, enquanto ainda há folga. E "
-              "cada furo é soldado UMA vez só: a ponte de solda sai da própria "
-              "junta, não é um passo separado."
+              "cada ilha de cobre é soldada UMA vez só: a ponte sai da própria "
+              "junta, não é um passo separado. As duas faces de um furo são ilhas "
+              "diferentes — soldar de um lado não atrapalha o outro."
               % (len(ordem), layout.spec.cols, layout.spec.rows),
               grupo="Antes de começar")
 
@@ -243,18 +285,23 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
     base = 2 if ordem else 1
     numero_do_item = {k: base + k for k in range(len(itens))}
 
-    # O que ENTOPE o furo e o que entra nele: o terminal do componente ou a ponta
-    # do fio. Fio de passagem so deita sobre a ilha. Por isso o furo pertence a
-    # quem o ocupa - e so na falta de ocupante ao ultimo que encosta.
-    enfia, encosta = {}, {}
-    for k, (_tipo, _carga, cobre, ocupa) in enumerate(itens):
-        for furo in cobre:
-            encosta[furo] = max(encosta.get(furo, -1), k)
-        for furo in ocupa:
-            enfia[furo] = max(enfia.get(furo, -1), k)
+    # Duas contas separadas, porque sao duas perguntas diferentes:
+    #
+    # `enche` responde "quando esse FURO fica atravessado" - e o que impede soldar
+    # antes, porque estanho no furo entope a passagem do terminal ou do fio.
+    #
+    # `na_ilha` responde "quando esse cobre fica pronto" - e o que decide quando a
+    # ponte pode ser feita. Vale por ilha: o que acontece do outro lado da placa
+    # nao muda nada deste lado.
+    enche, na_ilha = {}, {}
+    for k, (_tipo, _carga, ilhas, furos) in enumerate(itens):
+        for chave in ilhas:
+            na_ilha[chave] = max(na_ilha.get(chave, -1), k)
+        for furo in furos:
+            enche[furo] = max(enche.get(furo, -1), k)
 
-    def dono(furo):
-        return enfia.get(furo, encosta.get(furo, -1))
+    def dono(furo, face):
+        return max(enche.get(furo, -1), na_ilha.get((furo, face), -1))
 
     # item de cada peca, para quem nao tem furo conhecido cair junto dela
     item_da_peca = {}
@@ -304,7 +351,8 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
         for b in bloco:
             furos.add(tuple(b["de"]))
             furos.add(tuple(b["ate"]))
-        k = max(dono(f) for f in furos)
+        face = _face(bloco[0].get("face"))
+        k = max(dono(f, face) for f in furos)
         if k < 0:
             # Nenhum furo do bloco tem pino, ponta de fio ou via: e uma corrente de
             # pontes so por ilhas nuas. Descartar era o que fazia 8 das 121 pontes
@@ -312,26 +360,32 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
             # deixava a ligacao aberta. Na duvida cai no dono geografico.
             peca = _dono_da_ligacao(bloco[0], pos_pino, ordem_de)
             k = item_da_peca.get(peca, 0)
-        lado = ("por cima, lado dos componentes"
-                if bloco[0].get("face") == "componentes" else "por baixo, lado da solda")
+        lado = ("por cima, lado dos componentes" if face == CIMA
+                else "por baixo, lado da solda")
         pontes_do_item.setdefault(k, []).append({
             "lado": lado,
+            "face": face,
             "net": bloco[0]["net"],
             "furos": furos,
             "pares": sorted((b["de_label"], b["ate_label"]) for b in bloco),
         })
 
-    def avisos(k, cobre, ocupa):
+    def avisos(k, ilhas, furos):
         """O que dizer sobre os furos deste item: solda com ponte, ou nao solde.
 
-        O aviso de nao soldar so sai quando o furo ainda vai receber um TERMINAL ou
-        uma PONTA de fio depois. Estanho nesse furo agora significa furo entupido e
-        solda a desfazer - foi exatamente o erro que este roteiro cometia.
+        O aviso de nao soldar so sai quando alguma coisa ainda vai ATRAVESSAR aquele
+        furo - terminal, via ou fio de travessia. Estanho ali agora entope a
+        passagem e obriga a desfazer a solda.
+
+        Nao sai por causa de fio na outra face: as duas ilhas do furo sao cobres
+        separados, e soldar de um lado nao atrapalha o outro. Era dai que vinham os
+        avisos falsos.
         """
+        minhas = set(ilhas)
         linhas = []
         for bloco in sorted(pontes_do_item.get(k, ()), key=lambda x: x["pares"]):
             pares = bloco["pares"]
-            se_meus = [f for f in bloco["furos"] if f in set(ocupa)]
+            se_meus = [f for f in bloco["furos"] if (f, bloco["face"]) in minhas]
             if len(pares) == 1 and se_meus:
                 onde = nome_do_furo(*se_meus[0])
                 a, z = pares[0]
@@ -343,18 +397,18 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
                               % (bloco["lado"],
                                  ", ".join("%s+%s" % par for par in pares),
                                  bloco["net"]))
-        ocupa = set(ocupa)
-        for furo in sorted(set(cobre)):
-            depois = enfia.get(furo, -1)
+        meus_furos = set(furos)
+        for furo in sorted({f for f, _face in ilhas} | meus_furos):
+            depois = enche.get(furo, -1)
             if depois <= k:
                 continue
-            porque = ("o mesmo fio atravessa para o outro lado" if furo in ocupa
-                      else "ainda entra fio nele")
+            porque = ("o mesmo fio atravessa para o outro lado" if furo in meus_furos
+                      else "ainda vai passar coisa por dentro desse furo")
             linhas.append("NÃO solde %s agora — %s, no passo %d"
                           % (nome_do_furo(*furo), porque, numero_do_item[depois]))
         return linhas
 
-    for k, (tipo, carga, cobre, ocupa) in enumerate(itens):
+    for k, (tipo, carga, ilhas, furos) in enumerate(itens):
         i = carga[0]
         grupo = "Peça %d de %d — %s" % (i + 1, len(ordem), ordem[i])
 
@@ -371,7 +425,7 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
             if getattr(fp, "pin_note", ""):
                 detalhe += " · " + fp.pin_note
             passo("Coloque %s e solde os terminais" % ref, detalhe,
-                  grupo=grupo, itens=lista + avisos(k, cobre, ocupa))
+                  grupo=grupo, itens=lista + avisos(k, ilhas, furos))
 
         elif tipo == "via":
             _i, furo, net = carga
@@ -380,7 +434,7 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
                   "de terminal no furo e corte rente dos dois lados: é ela que liga "
                   "a face de cima à de baixo. A solda de cada lado vem junto com o "
                   "cordão daquele lado — neste passo ou mais adiante.",
-                  grupo=grupo, itens=avisos(k, cobre, ocupa))
+                  grupo=grupo, itens=avisos(k, ilhas, furos))
 
         elif tipo == "fio":
             f = carga[1]
@@ -391,7 +445,7 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
                   "Corte reto, %d furos, de %s a %s%s."
                   % (f["furos"], de, ate,
                      " — lado dos componentes" if f["face"] == "componentes" else ""),
-                  grupo=grupo, itens=avisos(k, cobre, ocupa))
+                  grupo=grupo, itens=avisos(k, ilhas, furos))
 
         else:
             _i, nome, seg = carga
@@ -403,7 +457,7 @@ def monta_roteiro(layout, plano, rotas, nome_do_furo, stats=None, netlist=None):
                   "Fio isolado sobrevoando, de %s a %s, soldado %s nas duas pontas. "
                   "Corte uns 8 mm a mais."
                   % (nome_do_furo(*seg["from"]), nome_do_furo(*seg["to"]), lado),
-                  grupo=grupo, itens=avisos(k, cobre, ocupa))
+                  grupo=grupo, itens=avisos(k, ilhas, furos))
 
     soltos = (stats or {}).get("orphan_pins") or []
     if soltos:

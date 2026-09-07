@@ -895,8 +895,9 @@ function renderBuild() {
     <h3>Passo a passo</h3>
     <p class="hint">Nesta ordem de propósito: do <b>meio para as bordas</b>, porque cada
       peça montada tira espaço das trilhas de cima e das vias — as ligações difíceis
-      se fazem enquanto ainda há folga. E <b>cada furo é soldado uma vez só</b>: a ponte
-      de solda sai da própria junta, nunca antes dela. Clique para riscar o que já fez.</p>
+      se fazem enquanto ainda há folga. E <b>cada ilha de cobre é soldada uma vez só</b>:
+      a ponte sai da própria junta, nunca antes dela. As duas faces de um furo são ilhas
+      diferentes. Clique para riscar o que já fez.</p>
     ${roteiro}
 
     <h3>1. Pontes de solda — furos vizinhos, sem fio nenhum</h3>

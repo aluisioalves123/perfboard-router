@@ -740,6 +740,63 @@ class TestIntegridade(unittest.TestCase):
 
         self.assertEqual(cedo, [], "ponte mandada antes da hora:\n  " + "\n  ".join(cedo))
 
+    def test_so_avisa_para_nao_soldar_onde_algo_atravessa_o_furo(self):
+        """Fio deitado numa face nao entope o furo: a outra ilha segue livre.
+
+        Regressao de bancada. O guia mandava "NAO solde F13 agora, ainda entra fio
+        nele" quando o fio deste passo era da face de cima e o do passo citado era
+        da de baixo - cobres separados, redes diferentes, nada se atrapalhava. Um
+        dos avisos chegou a dizer "o mesmo fio atravessa" para dois fios distintos
+        em faces opostas. Na placa real isso enchia o manual de proibicao inventada,
+        e proibicao inventada custa confianca no manual inteiro.
+
+        So enche o furo o que ATRAVESSA a placa: terminal de componente, via, e fio
+        marcado como travessia. Este teste cobra que todo aviso aponte para um passo
+        que faz uma dessas tres coisas naquele furo.
+        """
+        import re
+
+        for faces in (1, 2):
+            for seed in (1, 2, 3, 4, 5):
+                res = self.solve_case(placer={"effort": "rapido", "seed": seed},
+                                      router={"faces": faces})
+                roteiro = res["build"]["roteiro"]
+                por_numero = {p["n"]: p for p in roteiro}
+
+                def atravessa(passo, furo):
+                    """O passo enfia mesmo alguma coisa por dentro deste furo?"""
+                    titulo, det = passo["titulo"], passo["detalhe"]
+                    if titulo.startswith("Via no furo "):
+                        return titulo.split()[3] == furo
+                    if titulo.startswith("Coloque "):
+                        return any(re.match(r"pino \S+ no furo %s$" % re.escape(furo), i)
+                                   for i in passo["itens"])
+                    if titulo.startswith(("Fio de ", "Jumper de ")):
+                        if titulo.startswith("Jumper de "):
+                            return furo in det        # jumper e enfiado nas duas pontas
+                        # so vale a ponta marcada: a outra fica deitada na ilha
+                        return bool(re.search(
+                            re.escape(furo) + r" \((vem do outro lado|atravessa "
+                            r"para o outro lado)\)", det))
+                    return False
+
+                inventados = []
+                for passo in roteiro:
+                    for item in passo["itens"]:
+                        m = re.match(r"NÃO solde (\S+) agora — .*no passo (\d+)$", item)
+                        if not m:
+                            continue
+                        furo, n = m.group(1), int(m.group(2))
+                        se = por_numero.get(n)
+                        if se is None or not atravessa(se, furo):
+                            inventados.append(
+                                "passo %d proibe soldar %s por causa do passo %d, "
+                                "que nao atravessa esse furo" % (passo["n"], furo, n))
+                self.assertEqual(
+                    inventados, [],
+                    "faces=%d semente %d: proibição inventada —\n  " % (faces, seed)
+                    + "\n  ".join(inventados))
+
     def test_nenhuma_ilha_e_soldada_em_dois_passos(self):
         """Pontes ligadas entre si sao um cordao de solda so, feito de uma vez.
 
