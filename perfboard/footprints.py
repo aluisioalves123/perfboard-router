@@ -98,7 +98,36 @@ def holes_from_mm(mm: float, minimum: int = 1):
 
 def _pitch_from_name(name: str):
     m = re.search(r"_P(\d+(?:\.\d+)?)mm", name)
-    return float(m.group(1)) if m else None
+    if m:
+        return float(m.group(1))
+    for chave, mm in DOIS_TERMINAIS_MM:
+        if chave.lower() in name.lower():
+            return mm
+    return None
+
+
+def _modulo_conhecido(name: str):
+    """(mm entre fileiras, corpo_larg_mm, corpo_comp_mm) de um modulo da tabela."""
+    for chave, mm, larg, comp in MODULOS:
+        if chave.lower() in name.lower():
+            return mm, larg, comp
+    return None
+
+
+def _duas_fileiras(pins, cols):
+    """Layout de DIP: desce por uma fileira e volta pela outra.
+
+    E a numeracao do DIP e tambem a dos modulos desta tabela - o pino do meio mais
+    um fica de frente para o do meio, e o ultimo de frente para o primeiro.
+    """
+    n = len(pins)
+    metade = n // 2
+    out = {}
+    for i in range(metade):
+        out[pins[i]] = (0, i)
+    for i in range(metade, n):
+        out[pins[i]] = (cols, n - 1 - i)
+    return out
 
 
 # Folga entre a ponta do corpo e o furo, de cada lado, para a dobra de 90 graus
@@ -124,6 +153,38 @@ NAO_ESTORVAM_SOLDA = ("R_Axial", "R_Box", "R_Bare", "L_Axial", "D_DO", "D_A-405"
                       "TO-92", "TO92", "TO-226", "TO-18")
 
 
+# Modulos de dupla fileira (placas de desenvolvimento). A distancia entre as
+# fileiras nao aparece no nome do footprint, entao vem daqui. Os valores foram
+# LIDOS dos footprints da biblioteca do KiCad, e so entrou o que passa em duas
+# conferencias: a distancia e multipla de 2,54 mm, e a numeracao segue o sentido do
+# DIP com as duas fileiras do mesmo tamanho.
+#
+# Modulo que nao passa fica de fora de proposito e cai no aviso de footprint
+# desconhecido - o Adafruit Feather tem 16 pinos de um lado e 12 do outro, e chutar
+# simetria ali daria um layout confiante e errado, que e pior que nao saber.
+# (nome, mm entre fileiras, corpo em mm: largura x comprimento). O corpo sai do
+# courtyard do footprint e NAO e igual ao vao dos pinos: o Nano sobra 2 furos para
+# fora de cada fileira, no lado do USB. Sem isso o posicionador deixa outra peca
+# entrar onde a placa fisicamente esta - foi assim que um capacitor acabou prensado
+# entre o CI e um resistor num projeto real. `0` significa "nao medi, usa o vao dos
+# pinos".
+MODULOS = (
+    ("Arduino_Nano", 15.24, 18.3, 46.2),                 # 30 pinos, 2x15
+    ("Maple_Mini", 15.24, 18.3, 52.6),                   # 40 pinos, 2x20
+    ("Electrosmith_Daisy_Seed", 15.24, 18.7, 53.0),      # 40 pinos, 2x20
+    ("RaspberryPi_Pico_Common_THT", 17.78, 0, 0),        # 40 pinos, 2x20 (a SMD nao assenta)
+    ("Pololu_Breakout-16", 12.70, 0, 0),                 # 16 pinos, 2x8
+    ("ESP32-C3-DevKitM", 22.86, 25.7, 44.7),             # 30 pinos, 2x15
+    ("Olimex_MOD-WIFI-ESP8266", 22.86, 26.4, 34.0),      # 22 pinos, 2x11
+)
+
+# Pecas de dois terminais cujo vao NAO esta no nome. "6x3.5mm" num botao e o
+# tamanho do corpo, nao o passo dos pinos - sem esta tabela o sistema assumia
+# 1 furo e o botao simplesmente nao entrava.
+DOIS_TERMINAIS_MM = (
+    ("SW_PUSH_1P1T_6x3.5mm", 6.5),
+)
+
 # Altura de montagem, para ordenar o roteiro. Nao e medida em mm: e a ordem em que
 # as pecas entram na placa. Voce vira a placa para soldar, e ela precisa assentar -
 # com um borne alto ja montado, as pecas baixas caem do outro lado.
@@ -136,6 +197,8 @@ ALTURA = (
     (("CP_Radial", "C_Radial", "CP_Elec"), 5, "eletrolitico"),
     (("TO-220", "TO-126", "SOT-223"), 6, "com aba ou dissipador"),
     (("PinHeader", "Potentiometer", "Trimmer"), 7, "barra de pinos ou trimpot"),
+    (("Arduino_", "Maple_Mini", "Daisy_Seed", "RaspberryPi_Pico", "DevKit",
+      "MOD-WIFI", "Pololu_Breakout"), 7, "modulo sobre barra de pinos"),
     (("TerminalBlock", "Screw_Terminal"), 8, "borne, o mais alto"),
 )
 
@@ -290,15 +353,32 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "") -> FootprintDef:
         cols, err = holes_from_mm(width_mm, minimum=1)
         if err > 0.35:
             d.warnings.append("largura do DIP (%.2fmm) arredondada para %d furos" % (width_mm, cols))
-        n = len(pins)
-        half = n // 2
-        out = {}
-        for i in range(half):
-            out[pins[i]] = (0, i)
-        for i in range(half, n):
-            out[pins[i]] = (cols, n - 1 - i)
-        d.pins = out
-        d.label = "DIP-%d (%d furos de largura)" % (n, cols + 1)
+        d.pins = _duas_fileiras(pins, cols)
+        d.label = "DIP-%d (%d furos de largura)" % (len(pins), cols + 1)
+        return d
+
+    # --- Modulos de dupla fileira: Arduino Nano, Pico, Maple Mini... ---
+    conhecido = _modulo_conhecido(name)
+    if conhecido and len(pins) >= 6 and len(pins) % 2 == 0:
+        entre, corpo_larg, corpo_comp = conhecido
+        cols, err = holes_from_mm(entre, minimum=1)
+        if err > 0.35:
+            d.warnings.append("fileiras do modulo a %.2fmm arredondadas para %d furos"
+                              % (entre, cols))
+        d.pins = _duas_fileiras(pins, cols)
+        d.label = "%s: %d pinos, 2 fileiras a %d furos" % (name, len(pins), cols)
+        if corpo_larg and corpo_comp:
+            # A sobra e por LADO e arredondada ao furo mais proximo, nao para cima.
+            # O Nano passa so 0,1 furo de cada fileira na largura: arredondar para
+            # cima reservaria dois furos que a peca nao ocupa, e numa perfboard
+            # apertada esse espaco falta em outro lugar. No comprimento ele passa
+            # 1,6 furo de cada ponta, e ai a reserva existe mesmo.
+            span_x, span_y = d.size
+            sobra_x = max(0, int(round((corpo_larg / PITCH_MM - span_x) / 2.0)))
+            sobra_y = max(0, int(round((corpo_comp / PITCH_MM - span_y) / 2.0)))
+            d.margins = (sobra_x, sobra_y, sobra_x, sobra_y)
+            d.body_note = ("corpo %.1f x %.1f mm, do courtyard do footprint - a placa "
+                           "passa da fileira de pinos" % (corpo_larg, corpo_comp))
         return d
 
     # --- Pin headers / conectores em grade ---

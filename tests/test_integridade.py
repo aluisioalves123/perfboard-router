@@ -1206,6 +1206,87 @@ class TestIntegridade(unittest.TestCase):
         self.assertEqual(pequeno["layout"]["footprints"]["U1"]["margins"],
                          grande["layout"]["footprints"]["U1"]["margins"])
 
+    def test_arduino_nano_assenta_como_dip_largo(self):
+        """Modulo de dupla fileira nao pode cair no chute generico.
+
+        Regressao de uso: o Arduino Nano tem 30 pinos em duas fileiras a 15,24 mm -
+        exatamente 6 furos, e ele assenta na perfboard como um DIP largo. Sem
+        reconhecer o nome, o generico espalhava os 30 pinos em 15 colunas por 2
+        linhas coladas: geometria que nao existe e placa que nao fecha.
+
+        As posicoes conferidas aqui sao as do footprint da biblioteca do KiCad.
+        """
+        from perfboard.footprints import infer
+
+        d = infer("Module:Arduino_Nano", [str(i) for i in range(1, 31)], "A1")
+
+        self.assertEqual(d.warnings, [], "o Nano nao pode mais cair no desconhecido")
+        # duas fileiras a 6 furos, 15 pinos em cada
+        colunas = sorted({x for x, _ in d.pins.values()})
+        self.assertEqual(colunas, [0, 6])
+        self.assertEqual(sorted({y for _, y in d.pins.values()}), list(range(15)))
+        # numeracao no sentido do DIP: 16 de frente para 15, 30 de frente para 1
+        self.assertEqual(d.pins["1"], (0, 0))
+        self.assertEqual(d.pins["15"], (0, 14))
+        self.assertEqual(d.pins["16"], (6, 14))
+        self.assertEqual(d.pins["30"], (6, 0))
+
+        # A PLACA do Nano passa da fileira de pinos: 46,2 mm de comprimento contra
+        # 35,56 mm de vao entre o primeiro e o ultimo pino. Sem reservar isso, o
+        # posicionador deixa outra peca entrar onde o modulo fisicamente esta.
+        self.assertEqual(d.size, (7, 15), "vao dos pinos")
+        self.assertEqual(d.body_size, (7, 19), "corpo tem de passar dos pinos no comprimento")
+        # e a largura NAO pode inflar: a placa passa so 0,1 furo de cada fileira,
+        # e arredondar para cima ali jogaria dois furos fora numa placa apertada
+        self.assertEqual(d.body_size[0], d.size[0], "largura nao devia crescer")
+
+    def test_tabela_de_modulos_so_tem_o_que_assenta_na_grade(self):
+        """A tabela e uma promessa: quem esta nela assenta sem adaptador.
+
+        Entrada errada gera layout confiante e errado, que e pior que o aviso de
+        footprint desconhecido. Entao a promessa e cobrada aqui: distancia entre
+        fileiras multipla de 2,54 mm, e o numero de pinos dividido igualmente.
+        """
+        from perfboard.footprints import MODULOS, PITCH_MM, infer
+
+        for chave, mm, corpo_larg, corpo_comp in MODULOS:
+            furos = mm / PITCH_MM
+            self.assertAlmostEqual(
+                furos, round(furos), places=2,
+                msg="%s: fileiras a %.2fmm nao caem na grade de 0,1\"" % (chave, mm))
+
+            # um modulo par qualquer tem de sair simetrico e com a numeracao do DIP
+            pinos = [str(i) for i in range(1, 17)]
+            d = infer("Module:" + chave, pinos, "A1")
+            self.assertEqual(d.warnings, [], "%s deveria ser reconhecido" % chave)
+            self.assertEqual(d.pins["1"], (0, 0), chave)
+            self.assertEqual(d.pins["16"], (int(round(furos)), 0), chave)
+            esquerda = [p for p, (x, _) in d.pins.items() if x == 0]
+            self.assertEqual(len(esquerda), 8, "%s: fileiras desiguais" % chave)
+
+            # corpo declarado nao pode ser menor que o vao das fileiras: seria a
+            # peca mentindo que cabe onde nao cabe
+            if corpo_larg:
+                self.assertGreaterEqual(
+                    corpo_larg / PITCH_MM, furos,
+                    "%s: corpo de %.1fmm e mais estreito que as fileiras" % (chave, corpo_larg))
+
+    def test_botao_de_dois_pinos_usa_o_vao_real_e_avisa_da_dobra(self):
+        """"6x3.5mm" no nome e o CORPO do botao, nao o passo dos pinos.
+
+        O sistema lia o nome, nao achava passo nenhum e assumia 1 furo: o botao
+        simplesmente nao entrava. O vao real do APEM MJTP1250 e 6,5 mm, que nao cai
+        na grade - vai para 3 furos e o guia avisa que os terminais dobram.
+        """
+        from perfboard.footprints import infer
+
+        d = infer("Button_Switch_THT:SW_PUSH_1P1T_6x3.5mm_H5.0_APEM_MJTP1250",
+                  ["1", "2"], "SW1")
+        self.assertEqual(sorted(d.pins.values()), [(0, 0), (3, 0)])
+        self.assertTrue(any("dobre" in w for w in d.warnings),
+                        "6,5 mm nao cai na grade: tem de avisar da dobra — %s"
+                        % d.warnings)
+
     def test_peca_axial_ganha_folga_para_a_dobra(self):
         """Resistor de 1/4W tem que assentar em 4 furos, nao em 3.
 

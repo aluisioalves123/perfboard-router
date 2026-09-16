@@ -332,9 +332,34 @@ O sistema traduz a string de footprint do KiCad para um padrão de furos:
 | `DIP-8_W7.62mm`, `DIP-14`, `DIP-16`… | duas fileiras, largura tirada do `_W…mm` |
 | `PinHeader_1xNN` / `2xNN_P2.54mm` | 1 ou 2 colunas de pinos |
 | `R_Axial…_P7.62mm`, `C_Disc…_P5.00mm`, `LED_D…_P2.54mm` | 2 terminais, passo = `pitch / 2,54` arredondado |
+| `Arduino_Nano`, `Maple_Mini`, `RaspberryPi_Pico_Common_THT`… | módulo de dupla fileira, largura da tabela `MODULOS` |
 | `TO-92`, `TO-220`, `SOT-223` | 3 pernas em linha |
 | `TerminalBlock…` | passo 2 furos (5,08 mm) |
 | qualquer outro com `_P<x>mm` | pinos em linha com esse passo |
+
+### Módulos de dupla fileira
+
+Placa de desenvolvimento não traz a distância entre as fileiras no nome do footprint, então ela vem
+da tabela `MODULOS` em [`footprints.py`](perfboard/footprints.py). Os valores foram **lidos dos
+footprints da biblioteca do KiCad**, não de memória — o Arduino Nano, por exemplo, tem as fileiras a
+15,24 mm, que são exatamente 6 furos, e assenta como um DIP largo.
+
+Só entra na tabela o módulo que passa em duas conferências, ambas cobradas por teste: a distância
+entre fileiras é múltipla de 2,54 mm, e a numeração segue o sentido do DIP com as duas fileiras do
+mesmo tamanho. O Adafruit Feather ficou **de fora de propósito**: ele tem 16 pinos de um lado e 12
+do outro, e um layout confiante e errado é pior que o aviso de footprint desconhecido.
+
+A tabela guarda também o **tamanho do corpo**, tirado do courtyard — e ele não é o vão dos pinos.
+O Nano tem 46,2 mm de placa contra 35,56 mm entre o primeiro e o último pino: sobra ~2 furos para
+fora de cada fileira, no lado do USB. Sem reservar isso, o posicionador deixa outra peça entrar
+onde o módulo fisicamente está.
+
+A sobra é arredondada ao furo mais próximo, **não para cima**. Na largura o Nano passa só 0,1 furo
+de cada fileira; arredondar para cima reservaria dois furos que a peça não ocupa, e numa perfboard
+apertada esse espaço falta em outro lugar.
+
+Para adicionar um módulo, meça no footprint do KiCad em vez de confiar no datasheet do fabricante —
+é o footprint que define onde os furos caem.
 
 ### Tamanho do corpo, separado dos pinos
 
