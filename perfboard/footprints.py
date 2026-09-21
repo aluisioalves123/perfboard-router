@@ -207,8 +207,13 @@ PARES_EM_LINHA = (
 # pelo outro - por isso este modulo nao pode reaproveitar aquele caminho.
 #
 # (nome, furos entre esquerda e direita, furos entre cima e baixo)
+#
+# No MT3608 o par fica JUNTO e a placa e longa: VIN+ e VIN- lado a lado em cima,
+# VOUT+ e VOUT- lado a lado embaixo. Ja tive estes dois numeros trocados, e o erro
+# passou por um teste que conferia so em que canto cada pino estava - topologia
+# certa com proporcao absurda continua sendo peca errada.
 CANTOS = (
-    ("MT3608", 13, 1),
+    ("MT3608", 1, 13),
 )
 
 # Pecas de dois terminais cujo vao NAO esta no nome. "6x3.5mm" num botao e o

@@ -1314,6 +1314,16 @@ class TestIntegridade(unittest.TestCase):
 
         # e cai no arranjo de fileiras, que e o que da os campos do editor
         self.assertEqual(arranjo_dos_pinos(d.pins)["tipo"], "fileiras")
+        # E A PROPORCAO, que e por onde o erro passou: os dois pads de um lado
+        # ficam JUNTOS e a placa e comprida. Com os numeros trocados a peca fica
+        # com 13 furos entre VIN+ e VIN- e 1 furo entre a entrada e a saida - os
+        # cantos continuam certos e a peca continua nao existindo.
+        lado_a_lado = abs(d.pins["1"][0] - d.pins["2"][0])
+        comprimento = abs(d.pins["1"][1] - d.pins["3"][1])
+        self.assertLess(lado_a_lado, comprimento,
+                        "VIN+ e VIN- sao vizinhos; quem e longo e a placa "
+                        "(lado a lado=%d, comprimento=%d)" % (lado_a_lado, comprimento))
+
         # e mexer nas medidas nao pode embaralhar os cantos
         ajustado = aplica_override(infer("", ["1", "2", "3", "4"], "U2", "MT3608"),
                                    {"passo": 2, "largura": 9})
