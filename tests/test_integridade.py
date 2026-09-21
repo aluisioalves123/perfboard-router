@@ -1240,6 +1240,40 @@ class TestIntegridade(unittest.TestCase):
         # e arredondar para cima ali jogaria dois furos fora numa placa apertada
         self.assertEqual(d.body_size[0], d.size[0], "largura nao devia crescer")
 
+    def test_modulo_de_pads_nas_pontas_entra_na_forma_certa(self):
+        """TP4056 e MT3608 tem os pads em dois pares, um em cada ponta.
+
+        O sistema deduzia "4 pinos em linha", que nao e a forma de nenhum dos dois -
+        e nenhum ajuste salvava, porque o editor so redistribui dentro da forma que
+        ja existe. Nao da para cravar a medida (sao clones, variam de lote e nao
+        estao na biblioteca do KiCad), mas isso nao e desculpa para a forma errada:
+        na forma certa os campos `passo` e `largura` do editor passam a valer e quem
+        tem o modulo na mao acerta contando furo.
+
+        O reconhecimento e pelo VALOR: quem usa esses modulos raramente atribui
+        footprint.
+        """
+        from perfboard.footprints import (arranjo_dos_pinos, aplica_override, infer)
+
+        d = infer("", ["1", "2", "3", "4"], "U1", "TP4056 USB-C1")
+        self.assertIn("TP4056", d.label)
+        self.assertEqual(d.warnings, [], "reconhecido nao pode avisar desconhecido")
+
+        # dois pares: 1-2 numa coluna, 3-4 na outra
+        colunas = sorted({x for x, _ in d.pins.values()})
+        self.assertEqual(len(colunas), 2, "tem de ser duas pontas: %s" % d.pins)
+        self.assertEqual(d.pins["1"][0], d.pins["2"][0], "1 e 2 na mesma ponta")
+        self.assertEqual(d.pins["3"][0], d.pins["4"][0], "3 e 4 na mesma ponta")
+        self.assertNotEqual(d.pins["1"][0], d.pins["3"][0], "os pares sao opostos")
+
+        # e o que torna a forma util: o editor consegue mexer nos dois numeros
+        self.assertEqual(arranjo_dos_pinos(d.pins)["tipo"], "fileiras")
+        ajustado = aplica_override(
+            infer("", ["1", "2", "3", "4"], "U1", "TP4056 USB-C1"),
+            {"passo": 2, "largura": 11})
+        self.assertEqual(ajustado.pins["2"], (0, 2), "passo = vao dentro do par")
+        self.assertEqual(ajustado.pins["3"], (11, 0), "largura = de uma ponta a outra")
+
     def test_tabela_de_modulos_so_tem_o_que_assenta_na_grade(self):
         """A tabela e uma promessa: quem esta nela assenta sem adaptador.
 

@@ -361,6 +361,20 @@ apertada esse espaço falta em outro lugar.
 Para adicionar um módulo, meça no footprint do KiCad em vez de confiar no datasheet do fabricante —
 é o footprint que define onde os furos caem.
 
+### Módulos com os pads nas duas pontas
+
+TP4056, MT3608 e parecidos não têm fileira nem dupla fileira: são **dois pares de pads, um em cada
+ponta** da placa. Deduzir "pinos em linha" ali deixava a peça numa forma que não existe, e nenhum
+ajuste salvava — o editor só redistribui dentro da forma que já está lá.
+
+Esses módulos são clone, variam de lote e não estão na biblioteca do KiCad, então a tabela `PONTAS`
+não promete medida: ela entrega a **forma** certa e um ponto de partida. Com a forma certa, os dois
+campos que já existem no editor passam a valer — `passo` é o vão dentro do par, `largura` é de uma
+ponta à outra. Quem está com o módulo na mão encosta na placa, conta os furos e digita.
+
+O reconhecimento é pelo **valor** do componente, não pelo footprint: quem usa esses módulos
+raramente atribui um.
+
 ### Tamanho do corpo, separado dos pinos
 
 O footprint do KiCad acerta onde ficam os terminais, mas isso não é o tamanho da peça. Um borne

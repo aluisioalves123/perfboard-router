@@ -178,6 +178,21 @@ MODULOS = (
     ("Olimex_MOD-WIFI-ESP8266", 22.86, 26.4, 34.0),      # 22 pinos, 2x11
 )
 
+# Modulos com os pads em DUAS PONTAS: um par de cada lado da placa. Nao e fileira
+# nem dupla fileira classica, e deduzir "pinos em linha" deixava a peca numa forma
+# que nao existe.
+#
+# Os numeros aqui sao PONTO DE PARTIDA, nao medida: clone varia de lote e nenhum
+# deles esta na biblioteca do KiCad. O que importa e entrar na forma certa, porque
+# ai os campos `passo` e `largura` do editor passam a valer e quem tem o modulo na
+# mao acerta contando furo.
+#
+# (nome no valor ou no footprint, furos dentro do par, furos de uma ponta a outra)
+PONTAS = (
+    ("TP4056", 1, 9),
+    ("MT3608", 1, 13),
+)
+
 # Pecas de dois terminais cujo vao NAO esta no nome. "6x3.5mm" num botao e o
 # tamanho do corpo, nao o passo dos pinos - sem esta tabela o sistema assumia
 # 1 furo e o botao simplesmente nao entrava.
@@ -315,17 +330,24 @@ def _corpo_pelo_nome(name: str, d: FootprintDef):
         d.body_note = "trimpot/potenciometro, medida tipica"
 
 
-def infer(footprint: str, pin_numbers, ref: str = "") -> FootprintDef:
-    """Deduz onde ficam os pinos e qual e o tamanho real do corpo."""
-    d = _infer_pins(footprint, pin_numbers, ref)
+def infer(footprint: str, pin_numbers, ref: str = "", value: str = "") -> FootprintDef:
+    """Deduz onde ficam os pinos e qual e o tamanho real do corpo.
+
+    `value` entra porque modulo de prateleira quase nunca vem com footprint: quem
+    poe um TP4056 no esquematico escreve o nome no valor e deixa o footprint vazio.
+    """
+    d = _infer_pins(footprint, pin_numbers, ref, value)
     _corpo_pelo_nome((footprint or "").split(":", 1)[-1], d)
     return d
 
 
-def _infer_pins(footprint: str, pin_numbers, ref: str = "") -> FootprintDef:
+def _infer_pins(footprint: str, pin_numbers, ref: str = "",
+                value: str = "") -> FootprintDef:
     """Deduz o padrao de furos a partir da string de footprint e da lista de pinos."""
     fp = footprint or ""
     name = fp.split(":", 1)[-1]
+    # o valor so serve para reconhecer modulo sem footprint; nao vira rotulo
+    name_ou_valor = (name + " " + (value or "")).strip()
     pins = list(pin_numbers)
     d = FootprintDef(key=fp, label=name or "generico")
 
@@ -355,6 +377,21 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "") -> FootprintDef:
             d.warnings.append("largura do DIP (%.2fmm) arredondada para %d furos" % (width_mm, cols))
         d.pins = _duas_fileiras(pins, cols)
         d.label = "DIP-%d (%d furos de largura)" % (len(pins), cols + 1)
+        return d
+
+    # --- Modulos com os pads nas duas pontas: TP4056, MT3608... ---
+    for chave, passo_par, vao in PONTAS:
+        if chave.lower() not in name_ou_valor.lower():
+            continue
+        if len(pins) != 4:
+            break
+        d.pins = {pins[0]: (0, 0), pins[1]: (0, passo_par),
+                  pins[2]: (vao, 0), pins[3]: (vao, passo_par)}
+        d.label = "%s: 2 pads em cada ponta" % chave
+        d.pin_note = ("medida de partida: %d furo(s) dentro do par e %d de uma ponta "
+                      "a outra. Encoste o modulo na placa, conte os furos e ajuste em "
+                      "'afastamento dos terminais' - clone varia de lote."
+                      % (passo_par, vao))
         return d
 
     # --- Modulos de dupla fileira: Arduino Nano, Pico, Maple Mini... ---
@@ -586,6 +623,16 @@ def aplica_override(d: FootprintDef, spec: dict) -> FootprintDef:
     if pins:
         d.pins = {str(pin): (int(off[0]), int(off[1])) for pin, off in pins.items()}
         d.inferred = False
+        # O rotulo descrevia o padrao DEDUZIDO e continuava ali depois que o usuario
+        # redesenhava os pinos: um modulo com os pads nas duas pontas seguia anunciado
+        # como "4 pinos em linha". Rotulo que mente e pior que rotulo generico.
+        arranjo = arranjo_dos_pinos(d.pins)
+        if arranjo["tipo"] == "fileiras":
+            d.label = "%d pinos, 2 fileiras a %d furos" % (len(d.pins), arranjo["largura"])
+        elif arranjo["tipo"] == "linha":
+            d.label = "%d pinos em linha, passo %d furo(s)" % (len(d.pins), arranjo["passo"])
+        else:
+            d.label = "%d pinos, posições definidas por você" % len(d.pins)
 
     # Passo dos terminais. Vem antes das margens de proposito: o corpo e medido a
     # partir do retangulo dos pinos, entao mexer no passo depois moveria o corpo junto.
@@ -624,7 +671,7 @@ def build_library(netlist, overrides=None) -> dict:
     overrides = overrides or {}
     lib = {}
     for ref, comp in netlist.components.items():
-        d = infer(comp.footprint, comp.pins, ref)
+        d = infer(comp.footprint, comp.pins, ref, getattr(comp, "value", ""))
         d.estorva = estorva_solda(ref, comp.footprint)
         d.altura, d.altura_motivo = altura_montagem(comp.footprint)
         lib[ref] = aplica_override(d, overrides.get(ref))
