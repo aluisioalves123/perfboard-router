@@ -382,6 +382,12 @@ Esses módulos são clone, variam de lote e não estão na biblioteca do KiCad, 
 `PARES_EM_LINHA` não promete medida: entrega a **forma** certa e um ponto de partida, e diz isso na
 nota da peça em vez de fingir precisão.
 
+A tabela guarda também a **ordem dos pads na placa**, que não é a numérica. No TP4056 eles saem
+`OUT+, B+, B−, OUT−` — pinos 3, 1, 2, 4 do esquemático. No MT3608 o pino 1 fica em cima à esquerda,
+o 2 em cima à direita, 3 e 4 embaixo na mesma ordem: não é a numeração do DIP, que desceria por um
+lado e voltaria pelo outro. Errar isso não gera aviso nenhum — gera um guia que manda soldar a
+bateria onde está a saída.
+
 O reconhecimento é pelo **valor** do componente, não pelo footprint: quem usa esses módulos
 raramente atribui um.
 

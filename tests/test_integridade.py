@@ -1260,7 +1260,13 @@ class TestIntegridade(unittest.TestCase):
 
         # todos numa linha so, agrupados: dois juntos, um vao, dois juntos
         self.assertEqual({y for _x, y in d.pins.values()}, {0}, "e uma linha so")
-        self.assertEqual([d.pins[str(i)][0] for i in (1, 2, 3, 4)], [0, 1, 3, 4])
+
+        # A ORDEM na placa nao e a numerica: os pads saem OUT+, B+, B-, OUT-, que
+        # no esquematico sao os pinos 3, 1, 2, 4. Errar isso manda soldar a bateria
+        # onde esta a saida.
+        na_ordem = [p for p, _off in sorted(d.pins.items(), key=lambda kv: kv[1][0])]
+        self.assertEqual(na_ordem, ["3", "1", "2", "4"], "ordem dos pads na placa")
+        self.assertEqual([d.pins[p][0] for p in na_ordem], [0, 1, 3, 4])
 
         arranjo = arranjo_dos_pinos(d.pins)
         self.assertEqual(arranjo["tipo"], "pares",
@@ -1270,10 +1276,13 @@ class TestIntegridade(unittest.TestCase):
         # os dois numeros tem de mexer de verdade, um sem estragar o outro
         maior = aplica_override(infer("", ["1", "2", "3", "4"], "U1", "TP4056"),
                                 {"passo": 1, "vao": 4})
-        self.assertEqual([maior.pins[str(i)][0] for i in (1, 2, 3, 4)], [0, 1, 5, 6])
+        self.assertEqual([maior.pins[p][0] for p in na_ordem], [0, 1, 5, 6])
         aberto = aplica_override(infer("", ["1", "2", "3", "4"], "U1", "TP4056"),
                                  {"passo": 2, "vao": 2})
-        self.assertEqual([aberto.pins[str(i)][0] for i in (1, 2, 3, 4)], [0, 2, 4, 6])
+        self.assertEqual([aberto.pins[p][0] for p in na_ordem], [0, 2, 4, 6])
+        # e a ordem dos pads na placa sobrevive ao ajuste
+        self.assertEqual([p for p, _o in sorted(aberto.pins.items(),
+                                                key=lambda kv: kv[1][0])], na_ordem)
 
     def test_mt3608_tem_um_pad_em_cada_canto(self):
         """Quatro pads nao dizem qual e a forma: TP4056 e MT3608 tem quatro cada um.
@@ -1294,15 +1303,24 @@ class TestIntegridade(unittest.TestCase):
         linhas = sorted({y for _, y in d.pins.values()})
         self.assertEqual(len(colunas), 2, "tem de haver dois lados: %s" % d.pins)
         self.assertEqual(len(linhas), 2, "e dois pads por lado: %s" % d.pins)
-        self.assertEqual(d.pins["1"][0], d.pins["2"][0], "1 e 2 no mesmo lado")
-        self.assertEqual(d.pins["3"][0], d.pins["4"][0], "3 e 4 no mesmo lado")
+        # 1 em cima a esquerda, 2 em cima a direita, 3 e 4 embaixo na mesma ordem.
+        # Nao e a numeracao do DIP, que desceria por um lado e voltaria pelo outro.
+        esq, dir_ = colunas
+        cima, baixo = linhas
+        self.assertEqual(d.pins["1"], (esq, cima), "pino 1 em cima a esquerda")
+        self.assertEqual(d.pins["2"], (dir_, cima), "pino 2 em cima a direita")
+        self.assertEqual(d.pins["3"], (esq, baixo), "pino 3 embaixo a esquerda")
+        self.assertEqual(d.pins["4"], (dir_, baixo), "pino 4 embaixo a direita")
 
         # e cai no arranjo de fileiras, que e o que da os campos do editor
         self.assertEqual(arranjo_dos_pinos(d.pins)["tipo"], "fileiras")
+        # e mexer nas medidas nao pode embaralhar os cantos
         ajustado = aplica_override(infer("", ["1", "2", "3", "4"], "U2", "MT3608"),
                                    {"passo": 2, "largura": 9})
-        self.assertEqual(ajustado.pins["2"], (0, 2), "passo = entre os pads do lado")
-        self.assertEqual(ajustado.pins["3"], (9, 0), "largura = de um lado ao outro")
+        self.assertEqual(ajustado.pins["1"], (0, 0))
+        self.assertEqual(ajustado.pins["2"], (9, 0), "2 continua em cima a direita")
+        self.assertEqual(ajustado.pins["3"], (0, 2), "3 continua embaixo a esquerda")
+        self.assertEqual(ajustado.pins["4"], (9, 2))
 
     def test_linha_de_passo_unico_nao_vira_pares(self):
         """Quatro pinos igualmente espacados sao uma LINHA, nao dois pares.

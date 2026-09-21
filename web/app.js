@@ -737,6 +737,15 @@ function editorTamanho(ref, fp) {
   </div>`;
 }
 
+// Num módulo de 4 pads nos cantos, "entre pinos vizinhos" é a distância VERTICAL e
+// "entre as fileiras" é a horizontal — o contrário do que o nome sugere. Dizer o
+// eixo junto evita que a pessoa digite um número no campo do outro.
+function eixoDo(a, campo) {
+  const aoLongoDeY = a.eixo === 'y';
+  const vertical = campo === 'passo' ? aoLongoDeY : !aoLongoDeY;
+  return vertical ? 'cima ↕ baixo' : 'esquerda ↔ direita';
+}
+
 // Afastamento dos terminais, em furos. Guardamos passo/largura em vez das
 // coordenadas de cada pino: é o número que a pessoa mede na peça com uma régua, e
 // não há como gerar um padrão incoerente a partir dele.
@@ -763,13 +772,15 @@ function editorPinos(ref, fp, ov) {
       real: cada furo da perfboard vale 2,54 mm.</div>
     ${linha('passo', passo,
             a.tipo === 'pares' ? 'dentro do par'
-              : (a.fileiras > 1 ? 'entre pinos vizinhos' : 'entre os terminais'),
+              : (a.fileiras > 1 ? `entre pinos vizinhos (${eixoDo(a, 'passo')})`
+                                : 'entre os terminais'),
             'quantos furos separam um terminal do seguinte')}
     ${a.tipo === 'pares'
       ? linha('vao', vao, 'entre os pares', 'quantos furos separam um par do seguinte')
       : ''}
     ${a.fileiras > 1
-      ? linha('largura', largura, 'entre as fileiras', 'quantos furos separam as duas fileiras')
+      ? linha('largura', largura, `entre as fileiras (${eixoDo(a, 'largura')})`,
+              'quantos furos separam as duas fileiras')
       : ''}
     ${fp.pin_note ? `<div class="sizer-note">${fp.pin_note}</div>` : ''}
   </div>`;

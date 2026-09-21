@@ -188,9 +188,13 @@ MODULOS = (
 # dois campos do editor passam a valer e quem tem o modulo na mao acerta contando
 # furo.
 #
-# (nome no valor ou no footprint, furos dentro do par, furos entre os pares)
+# A ORDEM importa e nao e a numerica. No TP4056 os pads saem na placa como
+# OUT+, B+, B-, OUT- - ou seja, pinos 3, 1, 2, 4 do esquematico. Sem isto o guia
+# manda soldar a bateria onde esta a saida.
+#
+# (nome, furos dentro do par, furos entre os pares, ordem dos pinos na placa)
 PARES_EM_LINHA = (
-    ("TP4056", 1, 2),
+    ("TP4056", 1, 2, (2, 0, 1, 3)),
 )
 
 # Modulos com UM PAD EM CADA CANTO: duas colunas de dois, tipo um DIP de 4 pinos.
@@ -198,9 +202,13 @@ PARES_EM_LINHA = (
 # tem quatro pads, e so quem tem a peca na mao sabe se eles estao em linha ou nos
 # quatro cantos.
 #
-# (nome, furos entre os dois pads do mesmo lado, furos de um lado ao outro)
+# A ordem dos pinos e por LINHA, nao por coluna: 1 e 2 em cima (esquerda e
+# direita), 3 e 4 embaixo. Nao e a numeracao do DIP, que desce por um lado e volta
+# pelo outro - por isso este modulo nao pode reaproveitar aquele caminho.
+#
+# (nome, furos entre esquerda e direita, furos entre cima e baixo)
 CANTOS = (
-    ("MT3608", 1, 13),
+    ("MT3608", 13, 1),
 )
 
 # Pecas de dois terminais cujo vao NAO esta no nome. "6x3.5mm" num botao e o
@@ -390,37 +398,38 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "",
         return d
 
     # --- Modulos com um pad em cada canto: MT3608... ---
-    for chave, dentro, entre in CANTOS:
+    for chave, largo, alto in CANTOS:
         if chave.lower() not in name_ou_valor.lower():
             continue
         if len(pins) != 4:
             break
-        d.pins = {pins[0]: (0, 0), pins[1]: (0, dentro),
-                  pins[2]: (entre, 0), pins[3]: (entre, dentro)}
+        d.pins = {pins[0]: (0, 0), pins[1]: (largo, 0),
+                  pins[2]: (0, alto), pins[3]: (largo, alto)}
         d.label = "%s: 1 pad em cada canto" % chave
-        d.pin_note = ("medida de partida: %d furo(s) entre os dois pads do mesmo "
-                      "lado e %d de um lado ao outro. Encoste o modulo na placa, "
-                      "conte os furos e ajuste em 'afastamento dos terminais' - "
-                      "clone varia de lote." % (dentro, entre))
+        d.pin_note = ("medida de partida: %d furo(s) da esquerda para a direita e "
+                      "%d de cima para baixo. Pino 1 em cima a esquerda, 2 em cima "
+                      "a direita, 3 e 4 embaixo. Encoste o modulo na placa, conte "
+                      "os furos e ajuste em 'afastamento dos terminais' - clone "
+                      "varia de lote." % (largo, alto))
         return d
 
     # --- Modulos com os pads em pares numa linha so: TP4056... ---
-    for chave, dentro, entre in PARES_EM_LINHA:
+    for chave, dentro, entre, ordem in PARES_EM_LINHA:
         if chave.lower() not in name_ou_valor.lower():
             continue
-        if len(pins) < 4 or len(pins) % 2:
+        if len(pins) != len(ordem):
             break
         andar, pos = 0, {}
-        for i, pino in enumerate(pins):
+        for i, indice in enumerate(ordem):
             if i:
                 andar += dentro if i % 2 else entre
-            pos[pino] = (andar, 0)
+            pos[pins[indice]] = (andar, 0)
         d.pins = pos
         d.label = "%s: %d pads em linha, aos pares" % (chave, len(pins))
-        d.pin_note = ("medida de partida: %d furo(s) dentro do par e %d entre os "
-                      "pares. Encoste o modulo na placa, conte os furos e ajuste em "
-                      "'afastamento dos terminais' - clone varia de lote."
-                      % (dentro, entre))
+        d.pin_note = ("ordem na placa: %s. Medida de partida: %d furo(s) dentro do "
+                      "par e %d entre os pares - encoste o modulo, conte os furos e "
+                      "ajuste em 'afastamento dos terminais', que clone varia de lote."
+                      % (", ".join("pino " + pins[i] for i in ordem), dentro, entre))
         return d
 
     # --- Modulos de dupla fileira: Arduino Nano, Pico, Maple Mini... ---
