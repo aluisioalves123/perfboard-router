@@ -178,19 +178,20 @@ MODULOS = (
     ("Olimex_MOD-WIFI-ESP8266", 22.86, 26.4, 34.0),      # 22 pinos, 2x11
 )
 
-# Modulos com os pads em DUAS PONTAS: um par de cada lado da placa. Nao e fileira
-# nem dupla fileira classica, e deduzir "pinos em linha" deixava a peca numa forma
-# que nao existe.
+# Modulos com os pads numa borda so, AGRUPADOS EM PARES: dois juntos, um vao, dois
+# juntos. Nao e linha (o passo nao e unico) nem dupla fileira, e antes disto caia
+# em "irregular" - que e o pior lugar possivel, porque ali a interface deixa de
+# oferecer qualquer campo e a peca fica travada num padrao errado.
 #
-# Os numeros aqui sao PONTO DE PARTIDA, nao medida: clone varia de lote e nenhum
-# deles esta na biblioteca do KiCad. O que importa e entrar na forma certa, porque
-# ai os campos `passo` e `largura` do editor passam a valer e quem tem o modulo na
-# mao acerta contando furo.
+# Os numeros sao PONTO DE PARTIDA, nao medida: clone varia de lote e nenhum deles
+# esta na biblioteca do KiCad. O que importa e entrar na forma certa, porque ai os
+# dois campos do editor passam a valer e quem tem o modulo na mao acerta contando
+# furo.
 #
-# (nome no valor ou no footprint, furos dentro do par, furos de uma ponta a outra)
-PONTAS = (
-    ("TP4056", 1, 9),
-    ("MT3608", 1, 13),
+# (nome no valor ou no footprint, furos dentro do par, furos entre os pares)
+PARES_EM_LINHA = (
+    ("TP4056", 1, 2),
+    ("MT3608", 1, 2),
 )
 
 # Pecas de dois terminais cujo vao NAO esta no nome. "6x3.5mm" num botao e o
@@ -379,19 +380,23 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "",
         d.label = "DIP-%d (%d furos de largura)" % (len(pins), cols + 1)
         return d
 
-    # --- Modulos com os pads nas duas pontas: TP4056, MT3608... ---
-    for chave, passo_par, vao in PONTAS:
+    # --- Modulos com os pads em pares numa linha so: TP4056, MT3608... ---
+    for chave, dentro, entre in PARES_EM_LINHA:
         if chave.lower() not in name_ou_valor.lower():
             continue
-        if len(pins) != 4:
+        if len(pins) < 4 or len(pins) % 2:
             break
-        d.pins = {pins[0]: (0, 0), pins[1]: (0, passo_par),
-                  pins[2]: (vao, 0), pins[3]: (vao, passo_par)}
-        d.label = "%s: 2 pads em cada ponta" % chave
-        d.pin_note = ("medida de partida: %d furo(s) dentro do par e %d de uma ponta "
-                      "a outra. Encoste o modulo na placa, conte os furos e ajuste em "
+        andar, pos = 0, {}
+        for i, pino in enumerate(pins):
+            if i:
+                andar += dentro if i % 2 else entre
+            pos[pino] = (andar, 0)
+        d.pins = pos
+        d.label = "%s: %d pads em linha, aos pares" % (chave, len(pins))
+        d.pin_note = ("medida de partida: %d furo(s) dentro do par e %d entre os "
+                      "pares. Encoste o modulo na placa, conte os furos e ajuste em "
                       "'afastamento dos terminais' - clone varia de lote."
-                      % (passo_par, vao))
+                      % (dentro, entre))
         return d
 
     # --- Modulos de dupla fileira: Arduino Nano, Pico, Maple Mini... ---
@@ -537,6 +542,26 @@ def arranjo_dos_pinos(pins: dict) -> dict:
         vaos = {b - a for a, b in zip(vals, vals[1:])}
         return len(vaos) <= 1
 
+    def pares(vals):
+        """(vao dentro do par, vao entre pares) se os valores vierem aos pares.
+
+        Modulo de prateleira costuma trazer os pads assim: dois juntos, um espaco,
+        dois juntos. Os vaos alternam - os de indice par sao de dentro do par, os
+        impares sao entre um par e o seguinte.
+        """
+        vals = sorted(vals)
+        if len(vals) < 4 or len(vals) % 2:
+            return None
+        vaos = [b - a for a, b in zip(vals, vals[1:])]
+        dentro = {vaos[i] for i in range(0, len(vaos), 2)}
+        entre = {vaos[i] for i in range(1, len(vaos), 2)}
+        if len(dentro) != 1 or len(entre) != 1:
+            return None
+        d, e = dentro.pop(), entre.pop()
+        if d == e:
+            return None         # vao unico: isso e linha regular, nao pares
+        return d, e
+
     def passo_de(vals):
         vals = sorted(vals)
         if len(vals) < 2:
@@ -544,7 +569,7 @@ def arranjo_dos_pinos(pins: dict) -> dict:
         return max(1, (vals[-1] - vals[0]) // (len(vals) - 1))
 
     vazio = {"tipo": "irregular", "eixo": "x", "passo": 1, "largura": 0,
-             "fileiras": 1, "vao_total": 0}
+             "vao": 0, "fileiras": 1, "vao_total": 0}
     if len(pins) < 2:
         return vazio
 
@@ -553,10 +578,20 @@ def arranjo_dos_pinos(pins: dict) -> dict:
 
     # uma fileira so
     if len(ys) == 1:
+        emparelhado = pares(xs)
+        if emparelhado:
+            return {"tipo": "pares", "eixo": "x", "passo": emparelhado[0],
+                    "vao": emparelhado[1], "largura": 0, "fileiras": 1,
+                    "vao_total": xs[-1] - xs[0]}
         return {"tipo": "linha" if regular(xs) else "irregular", "eixo": "x",
                 "passo": passo_de(xs), "largura": 0, "fileiras": 1,
                 "vao_total": xs[-1] - xs[0]}
     if len(xs) == 1:
+        emparelhado = pares(ys)
+        if emparelhado:
+            return {"tipo": "pares", "eixo": "y", "passo": emparelhado[0],
+                    "vao": emparelhado[1], "largura": 0, "fileiras": 1,
+                    "vao_total": ys[-1] - ys[0]}
         return {"tipo": "linha" if regular(ys) else "irregular", "eixo": "y",
                 "passo": passo_de(ys), "largura": 0, "fileiras": 1,
                 "vao_total": ys[-1] - ys[0]}
@@ -579,7 +614,7 @@ def arranjo_dos_pinos(pins: dict) -> dict:
     return dict(vazio, fileiras=len(ys))
 
 
-def redistribui_pinos(d: FootprintDef, passo=None, largura=None) -> bool:
+def redistribui_pinos(d: FootprintDef, passo=None, largura=None, vao=None) -> bool:
     """Reposiciona os terminais com outro passo, mantendo a numeracao.
 
     Cada pino guarda seu lugar (que fileira, que posicao dentro dela) e so o
@@ -589,6 +624,20 @@ def redistribui_pinos(d: FootprintDef, passo=None, largura=None) -> bool:
     arranjo = arranjo_dos_pinos(d.pins)
     if arranjo["tipo"] == "irregular":
         return False
+
+    if arranjo["tipo"] == "pares":
+        p = arranjo["passo"] if passo is None else max(1, min(40, int(passo)))
+        v = arranjo.get("vao", 2) if vao is None else max(1, min(40, int(vao)))
+        ao_longo_de_x = arranjo["eixo"] == "x"
+        ordenados = sorted(d.pins.items(),
+                           key=lambda kv: kv[1][0] if ao_longo_de_x else kv[1][1])
+        pos, andar = {}, 0
+        for i, (pino, _off) in enumerate(ordenados):
+            if i:
+                andar += p if i % 2 else v      # dentro do par, depois entre pares
+            pos[pino] = (andar, 0) if ao_longo_de_x else (0, andar)
+        d.pins = pos
+        return True
 
     passo = arranjo["passo"] if passo is None else max(1, min(40, int(passo)))
     largura = arranjo["largura"] if largura is None else max(0, min(40, int(largura)))
@@ -636,9 +685,11 @@ def aplica_override(d: FootprintDef, spec: dict) -> FootprintDef:
 
     # Passo dos terminais. Vem antes das margens de proposito: o corpo e medido a
     # partir do retangulo dos pinos, entao mexer no passo depois moveria o corpo junto.
-    if spec.get("passo") is not None or spec.get("largura") is not None:
+    if (spec.get("passo") is not None or spec.get("largura") is not None
+            or spec.get("vao") is not None):
         try:
-            mexeu = redistribui_pinos(d, spec.get("passo"), spec.get("largura"))
+            mexeu = redistribui_pinos(d, spec.get("passo"), spec.get("largura"),
+                                      spec.get("vao"))
         except (TypeError, ValueError):
             mexeu = False
         if mexeu:

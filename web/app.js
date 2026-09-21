@@ -748,6 +748,7 @@ function editorPinos(ref, fp, ov) {
   }
   const passo = ov.passo !== undefined ? ov.passo : a.passo;
   const largura = ov.largura !== undefined ? ov.largura : a.largura;
+  const vao = ov.vao !== undefined ? ov.vao : a.vao;
   const mm = (n) => (n * 2.54).toFixed(2).replace('.', ',');
 
   const linha = (chave, valor, rotulo, dica) => `<label class="pin-campo" title="${dica}">
@@ -760,8 +761,13 @@ function editorPinos(ref, fp, ov) {
   return `<div class="sizer-pinos">
     <div class="sizer-help">Distância entre os <b>furos dos terminais</b>. Meça a peça
       real: cada furo da perfboard vale 2,54 mm.</div>
-    ${linha('passo', passo, a.fileiras > 1 ? 'entre pinos vizinhos' : 'entre os terminais',
+    ${linha('passo', passo,
+            a.tipo === 'pares' ? 'dentro do par'
+              : (a.fileiras > 1 ? 'entre pinos vizinhos' : 'entre os terminais'),
             'quantos furos separam um terminal do seguinte')}
+    ${a.tipo === 'pares'
+      ? linha('vao', vao, 'entre os pares', 'quantos furos separam um par do seguinte')
+      : ''}
     ${a.fileiras > 1
       ? linha('largura', largura, 'entre as fileiras', 'quantos furos separam as duas fileiras')
       : ''}
@@ -1393,9 +1399,10 @@ function bind() {
 
   // mostra a medida em mm enquanto a pessoa digita: ninguém pensa em "furos"
   $('#complist').addEventListener('input', (e) => {
-    const campo = e.target.closest('input[data-passo], input[data-largura]');
+    const campo = e.target.closest('input[data-passo], input[data-largura], input[data-vao]');
     if (!campo) return;
-    const chave = campo.dataset.passo !== undefined ? 'passo' : 'largura';
+    const chave = campo.dataset.passo !== undefined ? 'passo'
+      : (campo.dataset.vao !== undefined ? 'vao' : 'largura');
     const alvo = campo.closest('.pin-campo').querySelector(`[data-mm-de="${chave}"]`);
     if (alvo) alvo.textContent = ((+campo.value || 0) * 2.54).toFixed(2).replace('.', ',') + ' mm';
   });
@@ -1424,8 +1431,10 @@ function bind() {
           });
           const passo = caixa.querySelector('input[data-passo]');
           const largura = caixa.querySelector('input[data-largura]');
+          const vao = caixa.querySelector('input[data-vao]');
           if (passo) novo.passo = Math.max(1, Math.min(40, +passo.value || 1));
           if (largura) novo.largura = Math.max(0, Math.min(40, +largura.value || 0));
+          if (vao) novo.vao = Math.max(1, Math.min(40, +vao.value || 1));
         }
         novo.margins = margens;
         S.overrides[ref] = Object.assign({}, S.overrides[ref], novo);

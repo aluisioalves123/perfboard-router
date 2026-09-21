@@ -361,16 +361,19 @@ apertada esse espaço falta em outro lugar.
 Para adicionar um módulo, meça no footprint do KiCad em vez de confiar no datasheet do fabricante —
 é o footprint que define onde os furos caem.
 
-### Módulos com os pads nas duas pontas
+### Pads agrupados em pares
 
-TP4056, MT3608 e parecidos não têm fileira nem dupla fileira: são **dois pares de pads, um em cada
-ponta** da placa. Deduzir "pinos em linha" ali deixava a peça numa forma que não existe, e nenhum
-ajuste salvava — o editor só redistribui dentro da forma que já está lá.
+TP4056, MT3608 e parecidos trazem os pads numa borda só, **agrupados em pares**: dois juntos, um
+vão, dois juntos. Isso não é `linha` (o passo não é único) nem `fileiras` (não há duas fileiras
+paralelas) — caía em `irregular`, e irregular é o pior lugar possível: ali a interface deixa de
+oferecer **qualquer** campo, e a peça fica travada num padrão errado sem saída.
 
-Esses módulos são clone, variam de lote e não estão na biblioteca do KiCad, então a tabela `PONTAS`
-não promete medida: ela entrega a **forma** certa e um ponto de partida. Com a forma certa, os dois
-campos que já existem no editor passam a valer — `passo` é o vão dentro do par, `largura` é de uma
-ponta à outra. Quem está com o módulo na mão encosta na placa, conta os furos e digita.
+Por isso existe o arranjo `pares`, com dois números que a pessoa mede na peça: **dentro do par** e
+**entre os pares**. Os dois viram campo no editor, com o mm ao vivo ao lado.
+
+Esses módulos são clone, variam de lote e não estão na biblioteca do KiCad, então a tabela
+`PARES_EM_LINHA` não promete medida: entrega a **forma** certa e um ponto de partida, e diz isso na
+nota da peça em vez de fingir precisão.
 
 O reconhecimento é pelo **valor** do componente, não pelo footprint: quem usa esses módulos
 raramente atribui um.
