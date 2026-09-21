@@ -1275,6 +1275,35 @@ class TestIntegridade(unittest.TestCase):
                                  {"passo": 2, "vao": 2})
         self.assertEqual([aberto.pins[str(i)][0] for i in (1, 2, 3, 4)], [0, 2, 4, 6])
 
+    def test_mt3608_tem_um_pad_em_cada_canto(self):
+        """Quatro pads nao dizem qual e a forma: TP4056 e MT3608 tem quatro cada um.
+
+        O TP4056 traz os quatro numa borda so, aos pares; o MT3608 traz um em cada
+        canto. So quem tem a peca na mao sabe, entao as duas formas sao declaradas,
+        nao deduzidas pela contagem de pinos - deduzir daria uma das duas sempre
+        errada.
+        """
+        from perfboard.footprints import arranjo_dos_pinos, aplica_override, infer
+
+        d = infer("", ["1", "2", "3", "4"], "U2", "MT3608")
+        self.assertIn("MT3608", d.label)
+        self.assertEqual(d.warnings, [])
+
+        # duas colunas de dois: um pad em cada canto
+        colunas = sorted({x for x, _ in d.pins.values()})
+        linhas = sorted({y for _, y in d.pins.values()})
+        self.assertEqual(len(colunas), 2, "tem de haver dois lados: %s" % d.pins)
+        self.assertEqual(len(linhas), 2, "e dois pads por lado: %s" % d.pins)
+        self.assertEqual(d.pins["1"][0], d.pins["2"][0], "1 e 2 no mesmo lado")
+        self.assertEqual(d.pins["3"][0], d.pins["4"][0], "3 e 4 no mesmo lado")
+
+        # e cai no arranjo de fileiras, que e o que da os campos do editor
+        self.assertEqual(arranjo_dos_pinos(d.pins)["tipo"], "fileiras")
+        ajustado = aplica_override(infer("", ["1", "2", "3", "4"], "U2", "MT3608"),
+                                   {"passo": 2, "largura": 9})
+        self.assertEqual(ajustado.pins["2"], (0, 2), "passo = entre os pads do lado")
+        self.assertEqual(ajustado.pins["3"], (9, 0), "largura = de um lado ao outro")
+
     def test_linha_de_passo_unico_nao_vira_pares(self):
         """Quatro pinos igualmente espacados sao uma LINHA, nao dois pares.
 

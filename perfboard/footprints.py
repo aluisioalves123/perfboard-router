@@ -191,7 +191,16 @@ MODULOS = (
 # (nome no valor ou no footprint, furos dentro do par, furos entre os pares)
 PARES_EM_LINHA = (
     ("TP4056", 1, 2),
-    ("MT3608", 1, 2),
+)
+
+# Modulos com UM PAD EM CADA CANTO: duas colunas de dois, tipo um DIP de 4 pinos.
+# Forma diferente da de cima e nao da para deduzir pelo numero de pinos - os dois
+# tem quatro pads, e so quem tem a peca na mao sabe se eles estao em linha ou nos
+# quatro cantos.
+#
+# (nome, furos entre os dois pads do mesmo lado, furos de um lado ao outro)
+CANTOS = (
+    ("MT3608", 1, 13),
 )
 
 # Pecas de dois terminais cujo vao NAO esta no nome. "6x3.5mm" num botao e o
@@ -380,7 +389,22 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "",
         d.label = "DIP-%d (%d furos de largura)" % (len(pins), cols + 1)
         return d
 
-    # --- Modulos com os pads em pares numa linha so: TP4056, MT3608... ---
+    # --- Modulos com um pad em cada canto: MT3608... ---
+    for chave, dentro, entre in CANTOS:
+        if chave.lower() not in name_ou_valor.lower():
+            continue
+        if len(pins) != 4:
+            break
+        d.pins = {pins[0]: (0, 0), pins[1]: (0, dentro),
+                  pins[2]: (entre, 0), pins[3]: (entre, dentro)}
+        d.label = "%s: 1 pad em cada canto" % chave
+        d.pin_note = ("medida de partida: %d furo(s) entre os dois pads do mesmo "
+                      "lado e %d de um lado ao outro. Encoste o modulo na placa, "
+                      "conte os furos e ajuste em 'afastamento dos terminais' - "
+                      "clone varia de lote." % (dentro, entre))
+        return d
+
+    # --- Modulos com os pads em pares numa linha so: TP4056... ---
     for chave, dentro, entre in PARES_EM_LINHA:
         if chave.lower() not in name_ou_valor.lower():
             continue

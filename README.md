@@ -361,9 +361,16 @@ apertada esse espaço falta em outro lugar.
 Para adicionar um módulo, meça no footprint do KiCad em vez de confiar no datasheet do fabricante —
 é o footprint que define onde os furos caem.
 
-### Pads agrupados em pares
+### Módulos de prateleira: a forma é declarada, não deduzida
 
-TP4056, MT3608 e parecidos trazem os pads numa borda só, **agrupados em pares**: dois juntos, um
+Quatro pads não dizem qual é a forma. O **TP4056** traz os quatro numa borda só, agrupados em
+pares; o **MT3608** traz um em cada canto. Só quem tem a peça na mão sabe — deduzir pela contagem
+de pinos daria uma das duas sempre errada. Por isso as duas formas estão declaradas em tabela:
+`PARES_EM_LINHA` e `CANTOS`.
+
+O de cada canto cai no arranjo `fileiras`, que já existia. O em linha precisou de arranjo novo:
+
+TP4056 traz os pads numa borda só, **agrupados em pares**: dois juntos, um
 vão, dois juntos. Isso não é `linha` (o passo não é único) nem `fileiras` (não há duas fileiras
 paralelas) — caía em `irregular`, e irregular é o pior lugar possível: ali a interface deixa de
 oferecer **qualquer** campo, e a peça fica travada num padrão errado sem saída.
