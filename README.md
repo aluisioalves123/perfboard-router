@@ -382,6 +382,12 @@ Esses módulos são clone, variam de lote e não estão na biblioteca do KiCad, 
 `PARES_EM_LINHA` não promete medida: entrega a **forma** certa e um ponto de partida, e diz isso na
 nota da peça em vez de fingir precisão.
 
+Módulos de duas fileiras em **ziguezague** (nRF24L01, MT3608) ficam na tabela `ZIGUEZAGUE`: o par
+desce junto — 1 e 2 na primeira linha, 3 e 4 na segunda. Não é a numeração do DIP, que desce por um
+lado e volta pelo outro. Ali também vai a sobra do corpo **lado a lado**, porque nem toda plaquinha
+é centrada nos pinos: a do nRF24 sai quase 10 furos para a direita e menos de 1 para a esquerda, e
+reservar isso simétrico perderia furo do lado errado e deixaria peça entrar embaixo da antena.
+
 A tabela guarda também a **ordem dos pads na placa**, que não é a numérica. No TP4056 eles saem
 `OUT+, B+, B−, OUT−` — pinos 3, 1, 2, 4 do esquemático. No MT3608 o pino 1 fica em cima à esquerda,
 o 2 em cima à direita, 3 e 4 embaixo na mesma ordem: não é a numeração do DIP, que desceria por um

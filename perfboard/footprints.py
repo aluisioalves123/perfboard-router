@@ -212,8 +212,12 @@ PARES_EM_LINHA = (
 # VOUT+ e VOUT- lado a lado embaixo. Ja tive estes dois numeros trocados, e o erro
 # passou por um teste que conferia so em que canto cada pino estava - topologia
 # certa com proporcao absurda continua sendo peca errada.
-CANTOS = (
-    ("MT3608", 1, 13),
+# Sobra do corpo em furos, por lado (esquerda, cima, direita, baixo). None = o
+# corpo e o proprio vao dos pinos. Nao da para ser simetrico: a plaquinha do nRF24
+# sai quase 10 furos para a direita e menos de 1 para a esquerda.
+ZIGUEZAGUE = (
+    ("MT3608", 1, 13, None),
+    ("nRF24L01_Breakout", 1, 1, (1, 1, 10, 2)),
 )
 
 # Pecas de dois terminais cujo vao NAO esta no nome. "6x3.5mm" num botao e o
@@ -403,19 +407,28 @@ def _infer_pins(footprint: str, pin_numbers, ref: str = "",
         return d
 
     # --- Modulos com um pad em cada canto: MT3608... ---
-    for chave, largo, alto in CANTOS:
+    for chave, largo, alto, sobra in ZIGUEZAGUE:
         if chave.lower() not in name_ou_valor.lower():
             continue
-        if len(pins) != 4:
+        if len(pins) < 4 or len(pins) % 2:
             break
-        d.pins = {pins[0]: (0, 0), pins[1]: (largo, 0),
-                  pins[2]: (0, alto), pins[3]: (largo, alto)}
-        d.label = "%s: 1 pad em cada canto" % chave
+        # ziguezague: o par desce junto. Pino 1 em cima a esquerda, 2 em cima a
+        # direita, 3 e 4 na linha de baixo, e assim por diante. Nao e a numeracao
+        # do DIP, que desce por um lado e volta pelo outro.
+        d.pins = {pino: ((i % 2) * largo, (i // 2) * alto)
+                  for i, pino in enumerate(pins)}
+        pares = len(pins) // 2
+        d.label = ("%s: 1 pad em cada canto" % chave if pares == 2
+                   else "%s: 2 fileiras de %d" % (chave, pares))
         d.pin_note = ("medida de partida: %d furo(s) da esquerda para a direita e "
-                      "%d de cima para baixo. Pino 1 em cima a esquerda, 2 em cima "
-                      "a direita, 3 e 4 embaixo. Encoste o modulo na placa, conte "
-                      "os furos e ajuste em 'afastamento dos terminais' - clone "
-                      "varia de lote." % (largo, alto))
+                      "%d entre as linhas. Numeracao em ziguezague: impares na "
+                      "coluna da esquerda, pares na da direita. Encoste o modulo na "
+                      "placa, conte os furos e ajuste em 'afastamento dos "
+                      "terminais'." % (largo, alto))
+        if sobra:
+            d.margins = tuple(sobra)
+            d.body_note = ("sobra do corpo medida no courtyard do footprint, lado a "
+                           "lado - a plaquinha nao e centrada nos pinos")
         return d
 
     # --- Modulos com os pads em pares numa linha so: TP4056... ---

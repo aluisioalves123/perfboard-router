@@ -1284,6 +1284,42 @@ class TestIntegridade(unittest.TestCase):
         self.assertEqual([p for p, _o in sorted(aberto.pins.items(),
                                                 key=lambda kv: kv[1][0])], na_ordem)
 
+    def test_nrf24_fica_em_duas_fileiras_de_quatro(self):
+        """Modulo de 8 pads saia com tudo empilhado numa coluna so.
+
+        O nRF24L01 e 2 colunas x 4 linhas, passo 1 furo nos dois sentidos, com a
+        numeracao em ziguezague - 1 e 2 na primeira linha, 3 e 4 na segunda. Nao e a
+        do DIP, que desceria por um lado e voltaria pelo outro, e nao e uma fileira
+        so, que foi o que ele virava.
+
+        As medidas saem do footprint da biblioteca do KiCad, lidas.
+        """
+        from perfboard.footprints import arranjo_dos_pinos, infer
+
+        d = infer("RF_Module:nRF24L01_Breakout",
+                  [str(i) for i in range(1, 9)], "U1")
+        self.assertEqual(d.warnings, [], "esta na biblioteca: nao pode dar aviso")
+
+        colunas = sorted({x for x, _ in d.pins.values()})
+        linhas = sorted({y for _, y in d.pins.values()})
+        self.assertEqual(colunas, [0, 1], "duas colunas vizinhas")
+        self.assertEqual(linhas, [0, 1, 2, 3], "quatro linhas vizinhas")
+
+        # ziguezague: o par desce junto
+        for i in range(1, 9):
+            esperado = ((i - 1) % 2, (i - 1) // 2)
+            self.assertEqual(d.pins[str(i)], esperado, "pino %d fora do lugar" % i)
+
+        # e os campos do editor continuam valendo
+        self.assertEqual(arranjo_dos_pinos(d.pins)["tipo"], "fileiras")
+
+        # A PLAQUINHA NAO E CENTRADA NOS PINOS: ela sai ~10 furos para a direita e
+        # menos de 1 para a esquerda. Reservar isso simetrico perderia furo do lado
+        # errado e deixaria peca entrar embaixo da antena.
+        esq, _cima, dir_, _baixo = d.margins
+        self.assertGreater(dir_, esq * 3,
+                           "a sobra do corpo e de um lado so: %s" % (d.margins,))
+
     def test_mt3608_tem_um_pad_em_cada_canto(self):
         """Quatro pads nao dizem qual e a forma: TP4056 e MT3608 tem quatro cada um.
 
