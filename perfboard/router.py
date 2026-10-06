@@ -773,13 +773,21 @@ class Router:
         if cell in self.pin_of_hole:
             return out
 
+        # E furo TAPADO PELO CORPO de uma peca tambem nao serve. O jumper e fio
+        # isolado do lado dos componentes: para enfiar a ponta dele no furo e preciso
+        # alcancar o furo, e debaixo da plaquinha do Arduino nao se alcanca nada. A
+        # regra ja valia para a trilha de cima e simplesmente nunca foi aplicada ao
+        # jumper - dai o fio que aparecia pousando no meio do modulo.
+        if self._top_blocked(cell, net):
+            return out
+
         # 3) jumper reto, pulando obstaculos sem tocar nos furos do meio
         for dc, dr in DIRS:
             for k in range(2, cfg.max_jumper + 1):
                 alvo = (c + dc * k, r + dr * k)
                 if not spec.contains(*alvo):
                     break
-                if alvo in self.pin_of_hole:
+                if alvo in self.pin_of_hole or self._top_blocked(alvo, net):
                     continue
                 if res.pad_blocked(alvo, face, net):
                     continue
@@ -792,6 +800,8 @@ class Router:
             for dc, dr in DIRS:
                 alvo = (gx + dc, gy + dr)
                 if alvo == cell or alvo in self.pin_of_hole:
+                    continue
+                if self._top_blocked(alvo, net):
                     continue
                 if not spec.contains(*alvo):
                     continue

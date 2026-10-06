@@ -487,6 +487,13 @@ open("solda.svg", "w", encoding="utf-8").write(r["svg_bottom"])
 
 ---
 
+### Jumper também respeita o corpo da peça
+
+Jumper é fio isolado do lado dos componentes, e a ponta dele precisa **alcançar** o furo. Furo que
+existe na placa mas está debaixo da plaquinha de um módulo não serve — e era onde o roteador
+pousava jumper, porque a regra do corpo (`_top_blocked` / `sob_peca`) valia para a trilha de cima e
+nunca tinha sido aplicada ao jumper. Faltava **nos dois motores**, o Python e o C.
+
 ## Limitações conhecidas
 
 - O corpo do componente é um retângulo. Peças com formato irregular merecem conferida visual.

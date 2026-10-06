@@ -1284,6 +1284,52 @@ class TestIntegridade(unittest.TestCase):
         self.assertEqual([p for p, _o in sorted(aberto.pins.items(),
                                                 key=lambda kv: kv[1][0])], na_ordem)
 
+    def test_jumper_nao_pousa_em_furo_tapado_por_peca(self):
+        """Jumper e fio isolado por cima: a ponta dele precisa alcancar o furo.
+
+        Regressao de uso, vista no desenho: o jumper descia e pousava no meio do
+        corpo do Arduino - furo que existe na placa mas esta debaixo da plaquinha,
+        onde nao se enfia nada.
+
+        A regra ja valia para a trilha de cima (`_top_blocked`) e simplesmente nunca
+        tinha sido aplicada ao jumper. E estava faltando NOS DOIS motores: o nucleo
+        em C tem o vetor `sob_peca` e tambem nao o consultava ali. Por isso este
+        teste roda pelo motor que estiver ativo, e nao pelo caminho em Python.
+        """
+        from perfboard.board import BoardSpec
+        from perfboard.netlist import parse_netlist
+        from perfboard.project import build_layout
+        from perfboard.router import Router, RouterConfig
+        from perfboard import footprints as fpmod
+
+        achou_jumper = 0
+        for cols, rows in ((11, 11), (13, 13)):
+            for seed in (1, 2, 3):
+                res = self.solve_case(board={"cols": cols, "rows": rows},
+                                      placer={"effort": "rapido", "seed": seed},
+                                      router={"faces": 2, "allow_jumpers": True})
+
+                # o mesmo conjunto que o roteador usa, nao uma reconstrucao minha
+                nl = parse_netlist(self.text)
+                lib = fpmod.build_library(nl, {})
+                lay = build_layout(nl, BoardSpec.from_json(res["board"]), lib,
+                                   res["layout"]["placements"])
+                tapados = Router(lay, nl, RouterConfig(faces=2)).under_parts
+                self.assertTrue(tapados, "sem furo tapado o teste nao prova nada")
+
+                jumpers = [s for rota in res["routes"] for s in rota["segments"]
+                           if s["type"] == "jumper"]
+                achou_jumper += len(jumpers)
+                maus = [(s["from"], s["to"]) for s in jumpers
+                        if tuple(s["from"]) in tapados or tuple(s["to"]) in tapados]
+                self.assertEqual(
+                    maus, [],
+                    "placa %dx%d semente %d: jumper pousando sob o corpo de uma peca "
+                    "— %s" % (cols, rows, seed, maus))
+
+        self.assertGreater(achou_jumper, 0,
+                           "nenhum jumper foi gerado: o teste passou sem testar")
+
     def test_nrf24_fica_em_duas_fileiras_de_quatro(self):
         """Modulo de 8 pads saia com tudo empilhado numa coluna so.
 

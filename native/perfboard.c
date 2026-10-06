@@ -363,6 +363,11 @@ PB_EXPORT int pb_astar(const PbConfig *cfg,
         if (!cfg->allow_jumpers) continue;
         /* ou o furo tem o pino, ou tem a ponta do jumper - nunca os dois */
         if (tem_pino[cell]) continue;
+        /* E furo tapado pelo CORPO de uma peca tambem nao serve: o jumper e fio
+           isolado do lado dos componentes, e debaixo da plaquinha nao se alcanca o
+           furo para enfiar a ponta. A regra ja valia para a trilha de cima e nunca
+           foi aplicada ao jumper nem aqui nem no Python. */
+        if (sob_peca[cell]) continue;
 
         /* 3) jumper reto */
         for (int d = 0; d < PB_DIRS; d++) {
@@ -370,7 +375,7 @@ PB_EXPORT int pb_astar(const PbConfig *cfg,
                 int nc = c + DC[d] * k, nr = r + DR[d] * k;
                 if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) break;
                 int alvo = nr * cols + nc;
-                if (tem_pino[alvo]) continue;
+                if (tem_pino[alvo] || sob_peca[alvo]) continue;
                 if (pad_bloqueado(&x, alvo, face)) continue;
                 double custo = cfg->jumper_base + cfg->jumper_per_hole * (double)k
                              + pad_extra(&x, alvo, face);
@@ -390,7 +395,7 @@ PB_EXPORT int pb_astar(const PbConfig *cfg,
                 int nc = gc + DC[d], nr = gr + DR[d];
                 if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) continue;
                 int alvo = nr * cols + nc;
-                if (alvo == cell || tem_pino[alvo]) continue;
+                if (alvo == cell || tem_pino[alvo] || sob_peca[alvo]) continue;
                 double dx = (double)(nc - c), dy = (double)(nr - r);
                 double dist = sqrt(dx * dx + dy * dy);
                 if (dist < 2.0 || dist > (double)cfg->max_jumper) continue;
